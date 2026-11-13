@@ -3,7 +3,7 @@ on:
   push:
   workflow_dispatch:
 env:
-  APP_NAME: SatanicAI
+  APP_NAME: Satanic-AI
 jobs:
   iphone:
     runs-on: macos-latest
@@ -43,10 +43,15 @@ jobs:
         zip -r "$APP_NAME.ipa" Payload
 
         '
+    - name: Paket schnueren
+      run: |
+        mkdir out
+        cp "$APP_NAME.ipa" out/
+        cp Anleitung_Accounts_und_Keys.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-ipa
-        path: ${{ env.APP_NAME }}.ipa
+        path: out/
   android:
     runs-on: ubuntu-latest
     steps:
@@ -86,11 +91,14 @@ jobs:
       working-directory: android
       run: ./gradlew assembleDebug --no-daemon
     - name: APK umbenennen
-      run: cp android/app/build/outputs/apk/debug/app-debug.apk "$APP_NAME.apk"
+      run: |
+        mkdir out
+        cp android/app/build/outputs/apk/debug/app-debug.apk "out/$APP_NAME.apk"
+        cp Anleitung_Accounts_und_Keys.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-apk
-        path: ${{ env.APP_NAME }}.apk
+        path: out/
   windows:
     runs-on: windows-latest
     steps:
@@ -113,8 +121,11 @@ jobs:
     - run: npx electron-builder --win portable --publish never
     - name: EXE umbenennen
       shell: bash
-      run: cp dist/KI-Start.exe "dist/$APP_NAME.exe"
+      run: |
+        mkdir out
+        cp dist/KI-Start.exe "out/$APP_NAME.exe"
+        cp Anleitung_Accounts_und_Keys.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-exe
-        path: dist/${{ env.APP_NAME }}.exe
+        path: out/
