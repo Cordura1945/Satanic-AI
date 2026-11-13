@@ -1,0 +1,38 @@
+name: Build IPA
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Icon und Logo einbinden
+        run: |
+          mkdir -p Assets.xcassets/AppIcon.appiconset Assets.xcassets/Logo.imageset
+          cp icon.png Assets.xcassets/AppIcon.appiconset/icon.png
+          cp logo.png Assets.xcassets/Logo.imageset/logo.png
+          mkdir -p Assets.xcassets/Background.imageset
+          cp bg.jpg Assets.xcassets/Background.imageset/bg.jpg
+          echo '{"images":[{"filename":"bg.jpg","idiom":"universal"}],"info":{"author":"xcode","version":1}}' > Assets.xcassets/Background.imageset/Contents.json
+          echo '{"info":{"author":"xcode","version":1}}' > Assets.xcassets/Contents.json
+          echo '{"images":[{"filename":"icon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}' > Assets.xcassets/AppIcon.appiconset/Contents.json
+          echo '{"images":[{"filename":"logo.png","idiom":"universal"}],"info":{"author":"xcode","version":1}}' > Assets.xcassets/Logo.imageset/Contents.json
+      - name: XcodeGen installieren
+        run: brew install xcodegen
+      - name: Projekt erzeugen
+        run: xcodegen generate
+      - name: Bauen (ohne Signatur)
+        run: |
+          xcodebuild -project KIStart.xcodeproj -scheme KIStart -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: IPA packen
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/KIStart.app Payload/
+          zip -r KIStart.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KIStart-ipa
+          path: KIStart.ipa
