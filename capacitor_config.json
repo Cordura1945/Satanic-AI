@@ -1,0 +1,7 @@
+{
+  "appId": "com.kistart.app",
+  "appName": "KI-Start",
+  "webDir": "www",
+  "backgroundColor": "#000000",
+  "plugins": { "CapacitorHttp": { "enabled": true } }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "kistart",
+  "version": "1.0.0",
+  "description": "KI-Start",
+  "author": "KI-Start",
+  "main": "main.js",
+  "private": true,
+  "scripts": { "start": "electron ." },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/browser": "^6.0.3",
+    "@capacitor/cli": "^6.1.2",
+    "@capacitor/core": "^6.1.2"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.kistart.app",
+    "productName": "KI-Start",
+    "files": ["main.js", "icon.png", "www/**/*"],
+    "icon": "icon.png",
+    "win": { "target": "portable", "icon": "icon.png", "artifactName": "KI-Start.exe" },
+    "directories": { "output": "dist" }
+  }
+}
