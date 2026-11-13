@@ -1,0 +1,31 @@
+name: KIStart
+options:
+  bundleIdPrefix: com.kistart
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  KIStart:
+    type: application
+    platform: iOS
+    sources:
+      - path: KIStart.swift
+      - path: setup_all.sh
+        buildPhase: resources
+      - path: splash.mp4
+        buildPhase: resources
+      - path: Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kistart.app
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_CFBundleDisplayName: KI-Start
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        MARKETING_VERSION: "1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_NSCameraUsageDescription: "Für Fotos und Videos im Chat"
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Für Bilder und Videos im Chat"
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Für Videoaufnahmen im Chat"
