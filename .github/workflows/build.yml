@@ -47,7 +47,7 @@ jobs:
       run: |
         mkdir out
         cp "$APP_NAME.ipa" out/
-        cp Anleitung_Accounts_und_Keys.txt out/ || true
+        cp Anleitung*.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-ipa
@@ -89,12 +89,12 @@ jobs:
     - run: npx cap sync android
     - name: APK bauen
       working-directory: android
-      run: ./gradlew assembleDebug --no-daemon
+      run: ./gradlew assembleDebug --no-daemon || (sleep 30 && ./gradlew assembleDebug --no-daemon --refresh-dependencies)
     - name: APK umbenennen
       run: |
         mkdir out
         cp android/app/build/outputs/apk/debug/app-debug.apk "out/$APP_NAME.apk"
-        cp Anleitung_Accounts_und_Keys.txt out/ || true
+        cp Anleitung*.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-apk
@@ -124,7 +124,7 @@ jobs:
       run: |
         mkdir out
         cp dist/KI-Start.exe "out/$APP_NAME.exe"
-        cp Anleitung_Accounts_und_Keys.txt out/ || true
+        cp Anleitung*.txt out/ || true
     - uses: actions/upload-artifact@v4
       with:
         name: ${{ env.APP_NAME }}-exe
