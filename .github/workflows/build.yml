@@ -2,6 +2,8 @@ name: Alle bauen
 on:
   push:
   workflow_dispatch:
+env:
+  APP_NAME: SatanicAI
 jobs:
   iphone:
     runs-on: macos-latest
@@ -38,13 +40,13 @@ jobs:
 
         cp -R build/Build/Products/Release-iphoneos/KIStart.app Payload/
 
-        zip -r KIStart.ipa Payload
+        zip -r "$APP_NAME.ipa" Payload
 
         '
     - uses: actions/upload-artifact@v4
       with:
-        name: KIStart-ipa
-        path: KIStart.ipa
+        name: ${{ env.APP_NAME }}-ipa
+        path: ${{ env.APP_NAME }}.ipa
   android:
     runs-on: ubuntu-latest
     steps:
@@ -83,10 +85,12 @@ jobs:
     - name: APK bauen
       working-directory: android
       run: ./gradlew assembleDebug --no-daemon
+    - name: APK umbenennen
+      run: cp android/app/build/outputs/apk/debug/app-debug.apk "$APP_NAME.apk"
     - uses: actions/upload-artifact@v4
       with:
-        name: KIStart-apk
-        path: android/app/build/outputs/apk/debug/app-debug.apk
+        name: ${{ env.APP_NAME }}-apk
+        path: ${{ env.APP_NAME }}.apk
   windows:
     runs-on: windows-latest
     steps:
@@ -107,7 +111,10 @@ jobs:
         '
     - run: npm install
     - run: npx electron-builder --win portable --publish never
+    - name: EXE umbenennen
+      shell: bash
+      run: cp dist/KI-Start.exe "dist/$APP_NAME.exe"
     - uses: actions/upload-artifact@v4
       with:
-        name: KIStart-exe
-        path: dist/KI-Start.exe
+        name: ${{ env.APP_NAME }}-exe
+        path: dist/${{ env.APP_NAME }}.exe
