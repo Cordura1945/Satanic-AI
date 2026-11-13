@@ -79,9 +79,9 @@ struct RunPod {
         return "\"\""
     }
 
-    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil) -> String {
+    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0) -> String {
         let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
-        let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}]"
+        let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
         return "mutation{podFindAndDeployOnDemand(input:{\(vol)cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:\(disk),minVcpuCount:2,minMemoryInGb:15,gpuTypeId:\(q(gpu)),name:\"ki-chat\",imageName:\(q(image)),dockerArgs:\(q(cmd)),ports:\"8000/http\",env:\(env)}){id costPerHr machineId}}"
@@ -99,6 +99,7 @@ final class Model: ObservableObject {
     @Published var image: String { didSet { UserDefaults.standard.set(image, forKey: "image") } }
     @Published var disk: Int { didSet { UserDefaults.standard.set(disk, forKey: "disk") } }
     @Published var autoStop: Int { didSet { UserDefaults.standard.set(autoStop, forKey: "autoStop") } }
+    @Published var idleStop: Int { didSet { UserDefaults.standard.set(idleStop, forKey: "idleStop") } }
     @Published var mode: String { didSet { UserDefaults.standard.set(mode, forKey: "mode") } }
     @Published var volGB: Int { didSet { UserDefaults.standard.set(volGB, forKey: "volGB") } }
     @Published var dc: String { didSet { UserDefaults.standard.set(dc, forKey: "dc") } }
@@ -161,6 +162,7 @@ final class Model: ObservableObject {
         image = u.string(forKey: "image") ?? "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"
         disk = u.object(forKey: "disk") as? Int ?? 100
         autoStop = u.object(forKey: "autoStop") as? Int ?? 8
+        idleStop = u.object(forKey: "idleStop") as? Int ?? 30
     }
 
     func startLoop() {
@@ -210,7 +212,7 @@ final class Model: ObservableObject {
             let cost = (pod["costPerHr"] as? NSNumber)?.doubleValue ?? 0
             var up = ""
             if let rt = pod["runtime"] as? [String: Any], let s = (rt["uptimeInSeconds"] as? NSNumber)?.intValue {
-                up = " · \(s / 3600) h \((s % 3600) / 60) min"
+                up = " · \(s / 3600) h \((s % 3600) / 60) min" + String(format: " · Sitzung ca. $%.2f", cost * Double(s) / 3600)
                 upMin = s / 60
             }
             info = (gpuUsed.isEmpty ? "" : gpuUsed + " · ") + String(format: "$%.2f/h", cost) + up
@@ -292,7 +294,7 @@ final class Model: ObservableObject {
         for g in list {
             message = "Versuche \(g)…"
             do {
-                let m = RunPod.deployMutation(gpu: g, image: image, disk: disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC)
+                let m = RunPod.deployMutation(gpu: g, image: image, disk: disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop)
                 let (d, err) = try await RunPod(key: apiKey).gql(m)
                 if let p = d["podFindAndDeployOnDemand"] as? [String: Any], let id = p["id"] as? String {
                     let c = (p["costPerHr"] as? NSNumber)?.doubleValue ?? 0
@@ -678,6 +680,7 @@ struct ContentView: View {
                             SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
                             Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
                             Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
+                            Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
                             Stepper("Disk: \(m.disk) GB", value: $m.disk, in: 60...300, step: 10)
                             TextField("Rechenzentrum (nur Volume)", text: $m.dc).modifier(Field()).textInputAutocapitalization(.characters).autocorrectionDisabled()
                             TextField("Docker-Image", text: $m.image).modifier(Field()).textInputAutocapitalization(.never).autocorrectionDisabled()
