@@ -67,6 +67,7 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
    <div class="s" style="margin-top:8px;opacity:.7">Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im lokalen Speicher dieser App.</div>
   </details>
   <label>RunPod API-Key<input id="apiKey" type="password" autocomplete="off"></label>
+  <label>Vast.ai API-Key (Ersatz, optional)<input id="vastKey" type="password" autocomplete="off"></label>
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
   <label>Max. Preis ($/h, 0 = aus)<input id="maxPrice" type="number" step="0.05" min="0" max="3"></label>
   <label>Auto-Beenden (Stunden, 0 = aus)<input id="autoStop" type="number" min="0" max="48"></label>
@@ -81,16 +82,16 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
 <script>
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
-const D={apiKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"};
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+for(const k of ["apiKey","vastKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
 const API="https://api.runpod.io";
 async function gql(q){
   const r=await fetch(API+"/graphql",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+g("apiKey")},body:JSON.stringify({query:q})});
-  let o;try{o=await r.json()}catch(e){throw new Error("Ungültige Antwort (HTTP "+r.status+")")}
+  let o;let tx="";try{tx=await r.text();o=JSON.parse(tx)}catch(e){throw new Error("Ungültige Antwort (HTTP "+r.status+") "+tx.slice(0,160).replace(/\n/g," "))}
   const em=o.errors&&o.errors[0]&&o.errors[0].message;
   if(!o.data&&em)throw new Error(em);
   return {data:o.data||{},err:em};
@@ -108,7 +109,7 @@ function deploy(gpu,vol,dcid,b64){
   return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:${parseInt(g("disk"))||100},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
 /* ---- Zustand ---- */
-let S={phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
+let S={prov:"rp",phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
 const PB=[0,5,12,62,85,97,100],TM=[0,3,5,17,25,29,30],CAPB=[5,8,12,62,85,87,92,97,100];
 function tmin(p){for(let i=1;i<PB.length;i++)if(p<=PB[i]){const f=(p-PB[i-1])/(PB[i]-PB[i-1]);return TM[i-1]+f*(TM[i]-TM[i-1])}return 30}
 function tick(){
@@ -121,17 +122,71 @@ function tick(){
   S.eta=S.upMin>45?"dauert länger als üblich":"noch ca. "+Math.max(1,Math.round(rest))+" Min (Schätzung)";
   draw();
 }
+const VAPI="https://console.vast.ai/api/v0";
+async function vast(method,path,body){
+  const r=await fetch(VAPI+path,{method,headers:{"Content-Type":"application/json","Authorization":"Bearer "+g("vastKey")},body:body?JSON.stringify(body):undefined});
+  const t=await r.text();let o={};try{o=JSON.parse(t)}catch(e){}return {code:r.status,obj:o}
+}
+function idle(){Object.assign(S,{podId:null,phase:"none",info:"",step:"",log:[],chatURL:null,pct:0,shown:0,eta:"",upMin:0});draw()}
 async function poll(){
-  if(!g("apiKey")){msg("Unten im Bereich Einstellungen den RunPod-API-Key eintragen.");return}
+  if(!g("apiKey")&&!g("vastKey")){msg("Unten im Bereich Einstellungen den RunPod- oder Vast.ai-Key eintragen.");return}
+  let found=false;
+  if(g("apiKey"))found=await pollRP();
+  if(!found&&g("vastKey"))await pollVast();
+}
+async function pollVast(){
+  try{
+    const {obj:l}=await vast("GET","/instances/");
+    const ins=(l.instances||[]).find(x=>x.label==="ki-chat");
+    if(!ins)return idle();
+    S.prov="vast";S.podId=String(ins.id);
+    try{const {obj:me}=await vast("GET","/users/current/");const c=me.credit??me.balance;if(c!=null)S.bal=c}catch(e){}
+    const cost=ins.dph_total||0,t=ins.start_date?Math.max(0,Math.floor(Date.now()/1000-ins.start_date)):0;S.spend=cost;S.upMin=Math.floor(t/60);
+    S.info=(LS.getItem("ks_gpuUsed")||"Vast.ai")+" · $"+cost.toFixed(2)+"/h · "+Math.floor(t/3600)+" h "+Math.floor(t%3600/60)+" min · Sitzung ca. $"+(cost*t/3600).toFixed(2);
+    const ip=(ins.public_ipaddr||"").trim(),pm=ins.ports&&ins.ports["8000/tcp"]&&ins.ports["8000/tcp"][0];
+    if(ins.actual_status!=="running"||!ip||!pm){S.phase="boot";S.chatURL=null;S.log=[];S.pct=Math.max(S.pct,2);S.step="Vast.ai-Instanz startet (Image laden, 2–10 Min)…";return draw()}
+    const base=`http://${ip}:${pm.HostPort}`;let st=null;
+    try{const ac=new AbortController();setTimeout(()=>ac.abort(),8000);const r=await fetch(base+"/api/status",{signal:ac.signal,cache:"no-store"});if(r.ok)st=await r.json()}catch(e){}
+    if(st&&st.llm!==undefined){
+      S.chatURL=base+"/";S.log=[];
+      if(st.llm&&st.comfy){S.phase="ready";S.step="Alles bereit.";S.pct=100}
+      else{S.phase="loading";S.step=`Modelle laden… LLM ${st.llm?"✓":"…"}  Bild ${st.comfy?"✓":"…"}`;S.pct=Math.max(S.pct,(st.llm||st.comfy)?98:97)}
+    }else if(st&&Array.isArray(st.log)){S.phase="setup";S.log=st.log;S.chatURL=null;S.step=(st.label||"Setup")+"…";S.pct=Math.max(S.pct,st.pct||8)}
+    else{S.phase="boot";S.chatURL=null;S.log=[];S.pct=Math.max(S.pct,5);S.step="Container läuft, Setup startet…"}
+    draw();
+  }catch(e){msg("Vast.ai-Fehler: "+e.message)}
+}
+async function startVast(b64,errs){
+  msg("RunPod hat keine GPU frei – versuche Vast.ai…");
+  const disk=parseInt(g("disk"))||100,maxP=parseFloat(g("maxPrice"))||0;
+  const qy={verified:{eq:true},rentable:{eq:true},rented:{eq:false},num_gpus:{eq:1},gpu_ram:{gte:44000},disk_space:{gte:disk},direct_port_count:{gte:1},cuda_max_good:{gte:12.8},inet_down:{gte:300},reliability:{gte:0.95},order:[["dph_total","asc"]],type:"on-demand",limit:8};
+  if(maxP>0)qy.dph_total={lte:maxP};
+  const onstart='mkdir -p /workspace\necho "$SETUP_B64" | base64 -d > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n';
+  const env={HF_TOKEN:g("hfToken"),AUTO_STOP_H:String(g("autoStop")),IDLE_STOP_MIN:String(g("idleStop")),SETUP_B64:b64,"-p 8000:8000":"1"};
+  try{
+    const {code,obj}=await vast("POST","/bundles/",qy);
+    const offers=obj.offers||[];
+    if(!offers.length)errs.push(`Vast.ai: keine passende GPU im Preislimit (HTTP ${code})`);
+    for(const o of offers.slice(0,5)){
+      const gn=o.gpu_name||"GPU";msg(`Vast.ai: ${gn} · $${(o.dph_total||0).toFixed(2)}/h …`);
+      const {code:c2,obj:r}=await vast("PUT",`/asks/${o.id}/`,{image:g("image"),disk,label:"ki-chat",runtype:"ssh_direct",onstart,env});
+      if(r.success&&r.new_contract){S.prov="vast";S.podId=String(r.new_contract);LS.setItem("ks_gpuUsed","Vast.ai · "+gn);msg("Vast.ai gestartet: "+gn);await poll();return}
+      errs.push(`Vast.ai ${gn}: ${r.msg||r.error||"HTTP "+c2}`);
+    }
+  }catch(e){errs.push("Vast.ai: "+e.message)}
+  msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
+}
+async function pollRP(){
+  if(!g("apiKey"))return false;
   try{
     const {data:d}=await gql("query{myself{clientBalance currentSpendPerHr networkVolumes{id name size dataCenterId} pods{id name desiredStatus costPerHr runtime{uptimeInSeconds}}}}");
-    const me=d.myself;if(!me)return;
+    const me=d.myself;if(!me)return true;
     S.bal=me.clientBalance;S.spend=me.currentSpendPerHr||0;
     const v=(me.networkVolumes||[]).find(x=>x.name==="ki-chat-vol");
     if(v){S.volId=v.id;S.volInfo=`${v.size} GB · ${v.dataCenterId||"?"} · ca. $${(v.size*.07).toFixed(2)}/Monat`}else{S.volId=null;S.volInfo=""}
     const pod=(me.pods||[]).find(p=>p.name==="ki-chat"&&p.desiredStatus==="RUNNING");
-    if(!pod){Object.assign(S,{podId:null,phase:"none",info:"",step:"",log:[],chatURL:null,pct:0,shown:0,eta:"",upMin:0});return draw()}
-    S.podId=pod.id;
+    if(!pod){idle();return false}
+    S.prov="rp";S.podId=pod.id;
     let up="";if(pod.runtime&&pod.runtime.uptimeInSeconds!=null){const t=pod.runtime.uptimeInSeconds;up=` · ${Math.floor(t/3600)} h ${Math.floor(t%3600/60)} min · Sitzung ca. $${((pod.costPerHr||0)*t/3600).toFixed(2)}`;S.upMin=Math.floor(t/60)}
     S.info=(LS.getItem("ks_gpuUsed")?LS.getItem("ks_gpuUsed")+" · ":"")+"$"+(pod.costPerHr||0).toFixed(2)+"/h"+up;
     const base=`https://${pod.id}-8000.proxy.runpod.net`;let st=null;
@@ -146,17 +201,17 @@ async function poll(){
       S.phase="boot";S.chatURL=null;S.log=[];const rt=!!pod.runtime;
       S.pct=Math.max(S.pct,rt?5:2);S.step=rt?"Container läuft, Setup startet…":"Pod wird gestartet (Image laden, 2–5 Min)…";
     }
-    draw();
-  }catch(e){msg("RunPod-Fehler: "+e.message)}
+    draw();return true;
+  }catch(e){msg("RunPod-Fehler: "+e.message);return true}
 }
 async function start(){
   if(S.busy)return;
-  if(!g("apiKey")||!g("hfToken")){msg("API-Key und Hugging-Face-Token eintragen.");$("set").open=true;return}
+  if((!g("apiKey")&&!g("vastKey"))||!g("hfToken")){msg("RunPod- oder Vast.ai-Key und Hugging-Face-Token eintragen.");$("set").open=true;return}
   if(!window.SETUP_B64){msg("setup_all.sh fehlt im App-Paket.");return}
   S.busy=true;draw();
   try{
     let vol=null,dcid=null;
-    if(g("mode")==="volume"){
+    if(g("mode")==="volume"&&g("apiKey")){
       msg("Network Volume wird vorbereitet…");
       const {data:d0}=await gql("query{myself{networkVolumes{id name size dataCenterId}}}");
       const v=((d0.myself||{}).networkVolumes||[]).find(x=>x.name==="ki-chat-vol");
@@ -168,7 +223,7 @@ async function start(){
       }
     }
     const errs=[],maxP=parseFloat(g("maxPrice"))||0;
-    for(const gp of g("gpus").split("\n").map(x=>x.trim()).filter(Boolean)){
+    for(const gp of (g("apiKey")?g("gpus").split("\n"):[]).map(x=>x.trim()).filter(Boolean)){
       msg("Versuche "+gp+"…");
       try{
         const {data:d,err}=await gql(deploy(gp,vol,dcid,window.SETUP_B64));
@@ -181,13 +236,14 @@ async function start(){
         errs.push(gp+": "+(err||"keine Antwort"));
       }catch(e){errs.push(gp+": "+e.message)}
     }
+    if(g("vastKey")){await startVast(window.SETUP_B64,errs);return}
     msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
 }
 async function stopPod(){
   if(!S.podId||!confirm("Pod wirklich beenden? Alles im Pod geht verloren (ein Network Volume bleibt erhalten)."))return;
-  try{await gql(`mutation{podTerminate(input:{podId:${q(S.podId)}})}`);msg("Pod beendet.");S.podId=null;S.phase="none"}catch(e){msg("Fehler beim Beenden: "+e.message)}
+  try{if(S.prov==="vast"){const {code}=await vast("DELETE",`/instances/${S.podId}/`);if(code<200||code>=300){msg("Vast.ai: Beenden fehlgeschlagen (HTTP "+code+"). Bitte in der Vast.ai-Konsole löschen.");return}}else await gql(`mutation{podTerminate(input:{podId:${q(S.podId)}})}`);msg("Pod beendet.");S.podId=null;S.phase="none"}catch(e){msg("Fehler beim Beenden: "+e.message)}
   poll();
 }
 async function delVol(){

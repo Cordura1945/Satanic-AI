@@ -51,7 +51,8 @@ struct RunPod {
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            throw RPError(text: "Ungueltige Antwort (HTTP \(code))")
+            let body = String((String(data: data, encoding: .utf8) ?? "").prefix(160)).replacingOccurrences(of: "\n", with: " ")
+            throw RPError(text: "Ungueltige Antwort (HTTP \(code)) \(body)")
         }
         var errText: String? = nil
         if let errs = obj["errors"] as? [[String: Any]], let m = errs.first?["message"] as? String { errText = m }
@@ -88,6 +89,22 @@ struct RunPod {
     }
 }
 
+struct Vast {
+    let key: String
+    func req(_ method: String, _ path: String, _ body: [String: Any]? = nil) async throws -> (Int, [String: Any]) {
+        var r = URLRequest(url: URL(string: "https://console.vast.ai/api/v0" + path)!)
+        r.httpMethod = method
+        r.timeoutInterval = 40
+        r.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if let b = body { r.httpBody = try JSONSerialization.data(withJSONObject: b) }
+        let (data, resp) = try await URLSession.shared.data(for: r)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        return (code, obj)
+    }
+}
+
 // MARK: - Zustand
 enum Phase { case none, boot, setup, loading, ready }
 
@@ -95,6 +112,8 @@ enum Phase { case none, boot, setup, loading, ready }
 final class Model: ObservableObject {
     @Published var apiKey: String { didSet { Keychain.set(apiKey, for: "apiKey") } }
     @Published var hfToken: String { didSet { Keychain.set(hfToken, for: "hfToken") } }
+    @Published var vastKey: String { didSet { Keychain.set(vastKey, for: "vastKey") } }
+    var prov = "rp"
     @Published var gpus: String { didSet { UserDefaults.standard.set(gpus, forKey: "gpus") } }
     @Published var image: String { didSet { UserDefaults.standard.set(image, forKey: "image") } }
     @Published var disk: Int { didSet { UserDefaults.standard.set(disk, forKey: "disk") } }
@@ -152,6 +171,7 @@ final class Model: ObservableObject {
         let u = UserDefaults.standard
         apiKey = Keychain.get("apiKey")
         hfToken = Keychain.get("hfToken")
+        vastKey = Keychain.get("vastKey")
         let gl = "NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation"
         if !u.bool(forKey: "gpusV3") { u.set(gl, forKey: "gpus"); u.set(true, forKey: "gpusV3") }
         gpus = u.string(forKey: "gpus") ?? gl
@@ -187,13 +207,81 @@ final class Model: ObservableObject {
     func stopLoop() { loop?.cancel(); tickTask?.cancel() }
 
     func poll() async {
-        guard !apiKey.isEmpty else {
-            message = "Unten im Bereich Einstellungen den RunPod-API-Key eintragen."
+        if apiKey.isEmpty && vastKey.isEmpty {
+            message = "Unten im Bereich Einstellungen den RunPod- oder Vast.ai-Key eintragen."
             return
         }
+        var found = false
+        if !apiKey.isEmpty { found = await pollRP() }
+        if !found && !vastKey.isEmpty { await pollVast() }
+    }
+
+    private func resetIdle() {
+        podId = nil; phase = .none; info = ""; step = ""; log = []; chatURL = nil; pct = 0; shown = 0; eta = ""; upMin = 0
+    }
+
+    func pollVast() async {
+        do {
+            let v = Vast(key: vastKey)
+            let (_, lst) = try await v.req("GET", "/instances/")
+            let list = lst["instances"] as? [[String: Any]] ?? []
+            guard let ins = list.first(where: { ($0["label"] as? String) == "ki-chat" }),
+                  let idn = (ins["id"] as? NSNumber)?.intValue else { resetIdle(); return }
+            prov = "vast"
+            podId = String(idn)
+            if let (_, me) = try? await v.req("GET", "/users/current/"),
+               let c = (me["credit"] as? NSNumber) ?? (me["balance"] as? NSNumber) { balance = c.doubleValue }
+            let cost = (ins["dph_total"] as? NSNumber)?.doubleValue ?? 0
+            spend = cost
+            let sd = (ins["start_date"] as? NSNumber)?.doubleValue ?? 0
+            let secs = sd > 0 ? max(0, Int(Date().timeIntervalSince1970 - sd)) : 0
+            upMin = secs / 60
+            info = (gpuUsed.isEmpty ? "Vast.ai · " : gpuUsed + " · ") + String(format: "$%.2f/h", cost) + " · \(secs / 3600) h \((secs % 3600) / 60) min" + String(format: " · Sitzung ca. $%.2f", cost * Double(secs) / 3600)
+            let ip = ((ins["public_ipaddr"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            var port = ""
+            if let ports = ins["ports"] as? [String: Any], let arr = ports["8000/tcp"] as? [[String: Any]], let hp = arr.first?["HostPort"] as? String { port = hp }
+            let running = (ins["actual_status"] as? String) == "running"
+            guard running, !ip.isEmpty, !port.isEmpty else {
+                phase = .boot; chatURL = nil; log = []; pct = max(pct, 2)
+                step = "Vast.ai-Instanz startet (Image laden, 2–10 Min)…"
+                return
+            }
+            let base = "http://\(ip):\(port)"
+            var st: [String: Any]? = nil
+            if let u = URL(string: base + "/api/status") {
+                var r = URLRequest(url: u)
+                r.timeoutInterval = 8
+                if let res = try? await URLSession.shared.data(for: r),
+                   let http = res.1 as? HTTPURLResponse, http.statusCode == 200 {
+                    st = try? JSONSerialization.jsonObject(with: res.0) as? [String: Any]
+                }
+            }
+            if let st = st, st["llm"] != nil {
+                let llm = st["llm"] as? Bool ?? false
+                let comfy = st["comfy"] as? Bool ?? false
+                chatURL = URL(string: base + "/")
+                log = []
+                if llm && comfy { phase = .ready; step = "Alles bereit."; pct = 100 }
+                else { phase = .loading; step = "Modelle laden… LLM \(llm ? "✓" : "…")  Bild \(comfy ? "✓" : "…")"; pct = max(pct, llm || comfy ? 98 : 97) }
+            } else if let st = st, let l = st["log"] as? [String] {
+                phase = .setup; log = l; chatURL = nil
+                step = "\(st["label"] as? String ?? "Setup")…"
+                pct = max(pct, (st["pct"] as? NSNumber)?.doubleValue ?? 8)
+            } else {
+                phase = .boot; chatURL = nil; log = []; pct = max(pct, 5)
+                step = "Container läuft, Setup startet…"
+            }
+        } catch {
+            if (error as? URLError)?.code == .cancelled || error is CancellationError { return }
+            message = "Vast.ai-Fehler: \(error.localizedDescription)"
+        }
+    }
+
+    func pollRP() async -> Bool {
+        guard !apiKey.isEmpty else { return false }
         do {
             let (d, _) = try await RunPod(key: apiKey).gql("query{myself{clientBalance currentSpendPerHr networkVolumes{id name size dataCenterId} pods{id name desiredStatus costPerHr runtime{uptimeInSeconds}}}}")
-            guard let me = d["myself"] as? [String: Any] else { return }
+            guard let me = d["myself"] as? [String: Any] else { return true }
             balance = (me["clientBalance"] as? NSNumber)?.doubleValue
             spend = (me["currentSpendPerHr"] as? NSNumber)?.doubleValue ?? 0
             let vols = me["networkVolumes"] as? [[String: Any]] ?? []
@@ -205,9 +293,10 @@ final class Model: ObservableObject {
             let pods = me["pods"] as? [[String: Any]] ?? []
             guard let pod = pods.first(where: { ($0["name"] as? String) == "ki-chat" && ($0["desiredStatus"] as? String) == "RUNNING" }),
                   let id = pod["id"] as? String else {
-                podId = nil; phase = .none; info = ""; step = ""; log = []; chatURL = nil; pct = 0; shown = 0; eta = ""; upMin = 0
-                return
+                resetIdle()
+                return false
             }
+            prov = "rp"
             podId = id
             let cost = (pod["costPerHr"] as? NSNumber)?.doubleValue ?? 0
             var up = ""
@@ -244,16 +333,18 @@ final class Model: ObservableObject {
                 pct = max(pct, pod["runtime"] is NSNull || pod["runtime"] == nil ? 2 : 5)
                 step = pod["runtime"] is NSNull || pod["runtime"] == nil ? "Pod wird gestartet (Image laden, 2–5 Min)…" : "Container läuft, Setup startet…"
             }
+            return true
         } catch {
-            if (error as? URLError)?.code == .cancelled || error is CancellationError { return }
+            if (error as? URLError)?.code == .cancelled || error is CancellationError { return true }
             message = "RunPod-Fehler: \(error.localizedDescription)"
+            return true
         }
     }
 
     func start() async {
         guard !busy else { return }
-        guard !apiKey.isEmpty, !hfToken.isEmpty else {
-            message = "API-Key und Hugging-Face-Token eintragen."
+        guard !(apiKey.isEmpty && vastKey.isEmpty), !hfToken.isEmpty else {
+            message = "RunPod- oder Vast.ai-Key und Hugging-Face-Token eintragen."
             return
         }
         guard let url = Bundle.main.url(forResource: "setup_all", withExtension: "sh"),
@@ -267,7 +358,7 @@ final class Model: ObservableObject {
         var errs: [String] = []
         var useVol: String? = nil
         var useDC: String? = nil
-        if mode == "volume" {
+        if mode == "volume" && !apiKey.isEmpty {
             message = "Network Volume wird vorbereitet…"
             do {
                 let rp = RunPod(key: apiKey)
@@ -291,7 +382,7 @@ final class Model: ObservableObject {
             }
         }
         let list = gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        for g in list {
+        for g in (apiKey.isEmpty ? [] : list) {
             message = "Versuche \(g)…"
             do {
                 let m = RunPod.deployMutation(gpu: g, image: image, disk: disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop)
@@ -315,6 +406,48 @@ final class Model: ObservableObject {
                 errs.append("\(g): \(error.localizedDescription)")
             }
         }
+        if !vastKey.isEmpty {
+            await startVast(b64: b64, errs: errs)
+            return
+        }
+        message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
+    }
+
+    func startVast(b64: String, errs prev: [String]) async {
+        var errs = prev
+        message = "RunPod hat keine GPU frei – versuche Vast.ai…"
+        let v = Vast(key: vastKey)
+        var q: [String: Any] = ["verified": ["eq": true], "rentable": ["eq": true], "rented": ["eq": false], "num_gpus": ["eq": 1],
+                                "gpu_ram": ["gte": 44000], "disk_space": ["gte": disk], "direct_port_count": ["gte": 1],
+                                "cuda_max_good": ["gte": 12.8], "inet_down": ["gte": 300], "reliability": ["gte": 0.95],
+                                "order": [["dph_total", "asc"]], "type": "on-demand", "limit": 8]
+        if maxPrice > 0 { q["dph_total"] = ["lte": maxPrice] }
+        let onstart = "mkdir -p /workspace\necho \"$SETUP_B64\" | base64 -d > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n"
+        let env: [String: Any] = ["HF_TOKEN": hfToken, "AUTO_STOP_H": String(autoStop), "IDLE_STOP_MIN": String(idleStop), "SETUP_B64": b64, "-p 8000:8000": "1"]
+        do {
+            let (code, o) = try await v.req("POST", "/bundles/", q)
+            let offers = o["offers"] as? [[String: Any]] ?? []
+            if offers.isEmpty { errs.append("Vast.ai: keine passende GPU im Preislimit (HTTP \(code))") }
+            for off in offers.prefix(5) {
+                guard let oid = (off["id"] as? NSNumber)?.intValue else { continue }
+                let gname = off["gpu_name"] as? String ?? "GPU"
+                let price = (off["dph_total"] as? NSNumber)?.doubleValue ?? 0
+                message = "Vast.ai: \(gname) · $\(String(format: "%.2f", price))/h …"
+                let body: [String: Any] = ["image": image, "disk": disk, "label": "ki-chat", "runtype": "ssh_direct", "onstart": onstart, "env": env]
+                let (c2, r) = try await v.req("PUT", "/asks/\(oid)/", body)
+                if (r["success"] as? Bool) == true, let nc = (r["new_contract"] as? NSNumber)?.intValue {
+                    prov = "vast"; podId = String(nc)
+                    gpuUsed = "Vast.ai · " + gname
+                    UserDefaults.standard.set(gpuUsed, forKey: "gpuUsed")
+                    message = "Vast.ai gestartet: \(gname)"
+                    await poll()
+                    return
+                }
+                errs.append("Vast.ai \(gname): \((r["msg"] as? String) ?? (r["error"] as? String) ?? "HTTP \(c2)")")
+            }
+        } catch {
+            errs.append("Vast.ai: \(error.localizedDescription)")
+        }
         message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
     }
 
@@ -333,7 +466,12 @@ final class Model: ObservableObject {
     func terminate() async {
         guard let id = podId else { return }
         do {
-            _ = try await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
+            if prov == "vast" {
+                let (c, _) = try await Vast(key: vastKey).req("DELETE", "/instances/\(id)/")
+                if !(200...299).contains(c) { message = "Vast.ai: Beenden fehlgeschlagen (HTTP \(c)). Bitte in der Vast.ai-Konsole löschen." ; return }
+            } else {
+                _ = try await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
+            }
             message = "Pod beendet."
             podId = nil
             phase = .none
@@ -677,6 +815,7 @@ struct ContentView: View {
                                 }.padding(.top, 6)
                             }.tint(Theme.gold)
                             SecureField("RunPod API-Key", text: $m.apiKey).modifier(Field())
+                            SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
                             SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
                             Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
                             Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
@@ -728,7 +867,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            if m.apiKey.isEmpty || m.hfToken.isEmpty { showSettings = true }
+            if (m.apiKey.isEmpty && m.vastKey.isEmpty) || m.hfToken.isEmpty { showSettings = true }
             m.startLoop()
             startIntro()
             hideKeyboard()
