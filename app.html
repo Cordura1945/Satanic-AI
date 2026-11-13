@@ -70,6 +70,7 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
   <label>Max. Preis ($/h, 0 = aus)<input id="maxPrice" type="number" step="0.05" min="0" max="3"></label>
   <label>Auto-Beenden (Stunden, 0 = aus)<input id="autoStop" type="number" min="0" max="48"></label>
+  <label>Leerlauf-Abschaltung (Minuten, 0 = aus)<input id="idleStop" type="number" min="0" max="240" step="5"></label>
   <label>Disk (GB)<input id="disk" type="number" min="60" max="300" step="10"></label>
   <label>Rechenzentrum (nur neues Volume)<input id="dc" autocapitalize="characters" autocorrect="off"></label>
   <label>Docker-Image<input id="image" autocapitalize="none" autocorrect="off"></label>
@@ -80,9 +81,9 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
 <script>
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
-const D={apiKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"};
+const D={apiKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","hfToken","maxPrice","autoStop","disk","dc","volGB","image"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+for(const k of ["apiKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
@@ -102,7 +103,7 @@ async function rest(method,path,body){
 const q=JSON.stringify;
 function deploy(gpu,vol,dcid,b64){
   const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
-  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}]`;
+  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}]`;
   let v="";if(vol){v=`networkVolumeId:${q(vol)},`;if(dcid)v+=`dataCenterId:${q(dcid)},`}
   return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:${parseInt(g("disk"))||100},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
@@ -131,7 +132,7 @@ async function poll(){
     const pod=(me.pods||[]).find(p=>p.name==="ki-chat"&&p.desiredStatus==="RUNNING");
     if(!pod){Object.assign(S,{podId:null,phase:"none",info:"",step:"",log:[],chatURL:null,pct:0,shown:0,eta:"",upMin:0});return draw()}
     S.podId=pod.id;
-    let up="";if(pod.runtime&&pod.runtime.uptimeInSeconds!=null){const t=pod.runtime.uptimeInSeconds;up=` · ${Math.floor(t/3600)} h ${Math.floor(t%3600/60)} min`;S.upMin=Math.floor(t/60)}
+    let up="";if(pod.runtime&&pod.runtime.uptimeInSeconds!=null){const t=pod.runtime.uptimeInSeconds;up=` · ${Math.floor(t/3600)} h ${Math.floor(t%3600/60)} min · Sitzung ca. $${((pod.costPerHr||0)*t/3600).toFixed(2)}`;S.upMin=Math.floor(t/60)}
     S.info=(LS.getItem("ks_gpuUsed")?LS.getItem("ks_gpuUsed")+" · ":"")+"$"+(pod.costPerHr||0).toFixed(2)+"/h"+up;
     const base=`https://${pod.id}-8000.proxy.runpod.net`;let st=null;
     try{const ac=new AbortController();setTimeout(()=>ac.abort(),8000);const r=await fetch(base+"/api/status",{signal:ac.signal,cache:"no-store"});if(r.ok)st=await r.json()}catch(e){}
