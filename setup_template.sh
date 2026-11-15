@@ -73,10 +73,10 @@ cd ..
 echo "--- Workflows einrichten ---"
 WF=/workspace/ComfyUI/user/default/workflows
 mkdir -p "$WF"
-base64 -d <<'EOF_T2I' | gunzip > "$WF/Text2Image.json"
+cat > "$WF/Text2Image.json" <<'EOF_T2I'
 @@EMBED:chat/Text2Image.json@@
 EOF_T2I
-base64 -d <<'EOF_I2I' | gunzip > "$WF/Image2Image.json"
+cat > "$WF/Image2Image.json" <<'EOF_I2I'
 @@EMBED:chat/Image2Image.json@@
 EOF_I2I
 ls -l "$WF"
@@ -87,10 +87,10 @@ id agent >/dev/null 2>&1 || useradd -m -s /bin/bash agent >/dev/null 2>&1 || tru
 mkdir -p /workspace/projects
 chmod a+rx /workspace /workspace/chatapp 2>/dev/null || true
 chown -R agent:agent /workspace/projects 2>/dev/null || chmod -R a+rwX /workspace/projects
-base64 -d <<'EOF_SRV' | gunzip > /workspace/chatapp/server.py
+cat > /workspace/chatapp/server.py <<'EOF_SRV'
 @@EMBED:chat/server.py@@
 EOF_SRV
-base64 -d <<'EOF_HTML' | gunzip > /workspace/chatapp/index.html
+cat > /workspace/chatapp/index.html <<'EOF_HTML'
 @@EMBED:chat/index.html@@
 EOF_HTML
 

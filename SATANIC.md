@@ -16,6 +16,7 @@
 - setup_all.sh nie anlegen, bearbeiten oder pushen. Die Datei wird erzeugt.
 - Nichts aus Base64 entpacken: alle Quelltexte liegen als normale Dateien vor.
 - Nach jeder Aenderung pruefen: run mit "python3 tools/build_setup.py --check" im Projektordner.
+- Das Setup-Skript hat eine Groessengrenze (die Pruefung nennt sie). Wird sie ueberschritten, startet kein Pod mehr. chat/server.py und chat/index.html deshalb schlank halten: nichts Unnoetiges einbauen, keine grossen eingebetteten Daten.
 - Fertig heisst: git_push, danach build_status. Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
 - Will der Nutzer die fertige ipa, apk oder exe: get_build aufrufen. Nie selbst mit curl oder gh herunterladen.
 - Build-Dateien nicht entpacken oder pruefen. Icons in einer ipa liegen in einem Apple-eigenen PNG-Format, das sich hier nicht lesen laesst. Ein erfolgreicher Build ist der Nachweis.

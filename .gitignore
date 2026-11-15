@@ -1,5 +1,6 @@
 setup_all.sh
 setup_all.sh.gz
+setup_run.sh
 _tmp/
 __pycache__/
 *.pyc
