@@ -53,6 +53,28 @@ akzeptiert ("Agree"). Wenn ein Download fehlschlaegt: Link oeffnen,
 Agree antippen, App neu starten.
 
 
+4. GITHUB (TOKEN FUER DEN DEV-MODUS, OPTIONAL)
+----------------------------------------------
+Nur noetig, wenn die KI im Dev-Modus selbst Projekte in dein
+GitHub-Repo pushen soll.
+1) Token-Seite oeffnen:
+   https://github.com/settings/personal-access-tokens/new
+2) Namen eingeben, Ablaufdatum waehlen.
+3) "Repository access": "Only select repositories" und nur die
+   Repos auswaehlen, an denen die KI arbeiten darf.
+4) "Permissions" -> "Repository permissions":
+   Contents: Read and write
+   Actions: Read-only (damit die KI das Build-Ergebnis lesen kann)
+5) "Generate token" antippen und den Token SOFORT kopieren.
+   Er beginnt mit github_pat_.
+6) Im Chat: opt -> Dev-Einstellungen. Dev-Passwort festlegen
+   (mindestens 8 Zeichen), Token, Repo (besitzer/name) und
+   Branch eintragen, Speichern.
+7) Auf jedem neuen Server einmal das Dev-Passwort eingeben.
+Soll die KI auch neue Repos anlegen duerfen, braucht der Token
+zusaetzlich "All repositories" und "Administration: Read and
+write". Das ist deutlich mehr Zugriff, nur bei Bedarf vergeben.
+
 WICHTIG
 -------
 - Keys NIE weitergeben und nicht im Chat posten. Ist ein Key in
