@@ -69,6 +69,9 @@ Weg A: nur bestimmte Repos (weniger Zugriff)
    Workflows: Read and write (sonst kann die KI die Build-Datei
    nicht aendern)
    Actions: Read and write (Build-Ergebnis lesen, Build neu starten)
+   Pull requests: Read and write (damit die KI den Uebernahme-Antrag
+   fuer ihren Arbeitszweig selbst anlegen kann; ohne das bekommst du
+   stattdessen einen Link, ueber den du ihn anlegst)
 5) "Generate token" antippen und den Token SOFORT kopieren.
    Er beginnt mit github_pat_.
 

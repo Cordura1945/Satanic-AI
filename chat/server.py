@@ -1127,7 +1127,7 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
     tl = TOOLS
     if dev is not None: msgs[0]["content"] += dev_prompt(dev); tl = TOOLS + DEV_TOOLS
     temp = 0.3 if (tools and (dev is not None or wants_code(client_msgs))) else 0.7
-    retried = False; seen = {}; limit = MAX_ITER_DEV if dev is not None else MAX_ITER
+    retried = False; seen = {}; streak = 0; limit = MAX_ITER_DEV if dev is not None else MAX_ITER
     for it in range(limit):
         if dev is not None: compact(msgs)
         text, calls = llm_stream(msgs, emit, fast, tools, think, temp, tl)
@@ -1145,15 +1145,21 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
             except Exception: args = {}
             if c["name"] in DEV_FN:
                 lab, key = DEV_LABEL[c["name"]]
-                emit({"type": "tool", "name": c["name"], "prompt": "", "label": redact(lab + ": " + str(args.get(key) or ""))[:170].rstrip(": ")})
-                sig = c["name"] + json.dumps(args, sort_keys=True); n = seen[sig] = seen.get(sig, 0) + 1
+                ab = f" (ab Zeile {args.get('start')})" if c["name"] in ("read_file", "outline") and args.get("start") else ""
+                emit({"type": "tool", "name": c["name"], "prompt": "", "label": redact(lab + ": " + str(args.get(key) or "") + ab)[:170].rstrip(": ")})
+                sa = dict(args, start=str(args.get("start") or 1), lines=str(args.get("lines") or 250)) if c["name"] == "read_file" else args
+                sig = c["name"] + json.dumps(sa, sort_keys=True); n = seen[sig] = seen.get(sig, 0) + 1
                 if dev is None: res = "FEHLER: Der Dev-Modus ist ausgeschaltet. Der Nutzer muss ihn unter opt einschalten."
                 elif n >= 3 and c["name"] in DEV_RO:
                     res = f"FEHLER: Genau diesen Aufruf hast du in dieser Runde schon {n - 1}-mal gemacht. Wiederhole ihn nicht. Arbeite mit dem, was du schon weisst, halte Wichtiges mit note fest und beginne mit den Aenderungen."
+                elif streak >= 12 and c["name"] in DEV_READ:
+                    res = "FEHLER: Du hast 12-mal hintereinander nur gelesen oder gesucht. Halte jetzt mit note fest, was du gefunden hast (Datei, Zeile, Funktionsname) und was du als Naechstes aenderst. Danach kannst du weiterlesen."
                 else:
                     try: res = dev_call(c["name"], args, dev, emit)
                     except Exception as e: res = f"FEHLER: {e}"
                     if not res.startswith("FEHLER"):
+                        if c["name"] in DEV_MUT or c["name"] == "note": streak = 0
+                        elif c["name"] in DEV_READ: streak += 1
                         if c["name"] in DEV_MUT: seen.clear()
                         elif n == 2: res = "(Wiederholung: denselben Aufruf gab es in dieser Runde schon. Halte das Wichtige jetzt mit note fest.)\n" + res
                 if res.startswith("FEHLER"): emit({"type": "step", "ok": False, "text": res[:300]})
@@ -1200,7 +1206,9 @@ GITIGN = os.path.join(SAFE, "dev_gitignore")
 SEALED = [None]
 MAX_ITER_DEV = 60
 NOTES = os.path.join(STORE, "dev_notes.md")
-DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build", "send_file"}
+DEV_RO = {"list_files", "read_file", "search", "outline", "run", "build_status", "get_build", "send_file"}
+DEV_READ = {"list_files", "read_file", "search", "outline"}
+WORK = "satanic-dev"
 DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push", "use_upload", "build_rerun"}
 DEVLOCK = threading.Lock()
 SKIP = {".git", "node_modules", "__pycache__", ".gradle", "Pods", ".venv", "DerivedData"}
@@ -1264,6 +1272,10 @@ def seal_probe():
 TOKRX = re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
 TOKMSG = "Zugangs-Token gehoeren nicht in Befehle oder Dateien. Fuer GitHub gibt es git_clone, git_push, build_status und get_build; die nutzen den hinterlegten Token von selbst."
 def redact(t): return TOKRX.sub("***", t or "")
+GITBLOCK = re.compile(r"\.git-credentials|x-access-token|GIT_ASKPASS|GIT_PW|credential\.helper|credential-|insteadof|extraheader"
+                      r"|\bgit\s+(?:-[cC]\s+\S+\s+|--\S+\s+)*(?:push|pull|fetch|clone|rebase|merge|remote\s+(?:add|set-url|remove|rm|rename))\b", re.I)
+GITMSG = ("Dieser Befehl ist gesperrt: Abgleich mit GitHub und Zugangsdaten laufen nur ueber die Werkzeuge. git_clone holt den neuesten Stand, git_push gleicht vor dem Push selbst ab. "
+          "Erlaubt sind lokale Befehle wie git status, git diff, git log, git add, git restore, git revert.")
 
 def clip(t, cap=6000):
     t = t or ""
@@ -1375,6 +1387,35 @@ def _gitid(d, cfg):
     mail = (f"{uid}+{login}" if uid else login) + "@users.noreply.github.com"
     git(["config", "user.name", login], d); git(["config", "user.email", mail], d)
 
+def _sync(d, url, br, tok):
+    """Holt den Branch von GitHub und setzt lokale Commits darauf. None = Branch gibt es dort nicht, '' = nichts zu tun."""
+    code, out = git(["fetch", url, br], d, tok)
+    if code:
+        if "find remote ref" in out or "not found" in out.lower() or "empty" in out.lower(): return None
+        raise ValueError("Abgleich mit GitHub ging nicht: " + clip(out, 600))
+    code, _x = git(["merge-base", "--is-ancestor", "FETCH_HEAD", "HEAD"], d)
+    if code == 0: return ""
+    code, _x = git(["merge-base", "HEAD", "FETCH_HEAD"], d)
+    if code: raise ValueError("Der lokale Stand und GitHub haben keine gemeinsame Grundlage. Ausweg: git_clone mit fresh=true.")
+    code, n = git(["rev-list", "--count", "HEAD..FETCH_HEAD"], d)
+    code, out = git(["-c", "rebase.autoStash=true", "rebase", "FETCH_HEAD"], d)
+    if code:
+        c2, conf = git(["diff", "--name-only", "--diff-filter=U"], d)
+        git(["rebase", "--abort"], d)
+        raise ValueError("Deine lokalen Aenderungen passen nicht auf den neuesten Stand von GitHub (Konflikt in: " + (", ".join(conf.split()) or "unbekannt") + "). Lokal wurde nichts veraendert. "
+                         "Ausweg: git_clone mit fresh=true holt den neuesten Stand (deine Commits bleiben im Zweig satanic-sicherung), dann die Aenderung dort neu einbauen. Loese das NICHT mit git-Befehlen in run.")
+    return f"{n} neuere Aenderung(en) von GitHub uebernommen" + (" (Achtung: ungesicherte lokale Aenderungen liegen jetzt im git stash)" if "autostash resulted in conflicts" in out else "")
+def _guarded(d, repo, cfg):
+    return repo.lower() == str(cfg.get("repo") or "").lower() or os.path.isdir(os.path.join(d, ".github", "workflows")) or os.path.isfile(os.path.join(d, "SATANIC.md"))
+def _pr(repo, base, tok, title):
+    try:
+        prs = gh("GET", f"/repos/{repo}/pulls?state=open&head={repo.split('/')[0]}:{WORK}&base={base}", tok)
+        if isinstance(prs, list) and prs: return prs[0].get("html_url")
+        return gh("POST", f"/repos/{repo}/pulls", tok, {"title": title[:120] or "Aenderungen von Satanic", "head": WORK, "base": base,
+                  "body": "Von Satanic im Dev-Modus erstellt. Erst uebernehmen, wenn der Build fuer diesen Zweig gruen ist."})["html_url"]
+    except Exception:
+        return f"https://github.com/{repo}/compare/{base}...{WORK}?expand=1"
+
 def t_list(a, cfg):
     base = ppath(a.get("path"), True); out = []
     if os.path.isfile(base): return f"{prel(base)}  ({os.path.getsize(base)} B)"
@@ -1405,6 +1446,27 @@ def t_read(a, cfg):
     end = s + len(part) - 1
     more = f" Weiter mit start={end + 1}." if end < len(lines) else ""
     return "\n".join(part) + f"\n[Zeilen {s}-{end} von {len(lines)}.{more} Zeilennummer und Tab gehoeren nicht zum Inhalt.]"
+
+OUT_CODE = re.compile(r"^\s*(?:(?:export|public|private|internal|fileprivate|static|final|override|async|@\w+)\s+)*(?:def|class|func|function|struct|enum|extension|protocol|interface)\s+[\w$]+"
+                      r"|^\s*(?:const|let|var)\s+[\w$]+\s*=\s*(?:async\s*)?(?:function\b|\([^)]*\)\s*=>|[\w$]+\s*=>)|^[A-Z][A-Z0-9_]{2,}\s*=|^\s*//\s*MARK"
+                      r"|^\s*<(?:script|style|body|head|main|section|dialog|details|form|template)\b|^[\w-]+\s*\(\)\s*\{")
+OUT_MD = re.compile(r"^#{1,4}\s+\S|^[A-Z][A-Z0-9 ()-]{3,}$")
+OUT_YML = re.compile(r"^ {0,2}[\w.-]+:\s*$|^\s*- name:|^ {0,4}- uses:")
+def t_outline(a, cfg):
+    fp = ppath(a.get("path"), True)
+    if os.path.isdir(fp): raise ValueError("ist ein Ordner, nutze list_files")
+    data = open(fp, "rb").read(3000000)
+    if b"\0" in data[:4000]: return f"(Binaerdatei, {os.path.getsize(fp)} Bytes, keine Gliederung)"
+    ext = os.path.splitext(fp)[1].lower(); rx = OUT_MD if ext in (".md", ".txt") else OUT_YML if ext in (".yml", ".yaml") else OUT_CODE
+    flt = str(a.get("filter") or "").lower()
+    try: s = max(1, int(a.get("start") or 1))
+    except Exception: s = 1
+    lines = data.decode("utf-8", "replace").split("\n"); out = []; more = ""
+    for i, l in enumerate(lines, 1):
+        if i < s or not rx.search(l) or (flt and flt not in l.lower()): continue
+        if len(out) >= 120: more = f" Weiter mit start={i}."; break
+        out.append(f"{i}\t{l.strip()[:80]}")
+    return ("\n".join(out) or "(keine Gliederungspunkte gefunden, nutze search)") + f"\n[Gliederung von {prel(fp)}, {len(lines)} Zeilen.{more} Gezielt lesen: read_file mit start=<Zeile>.]"
 
 def _wbytes(fp, data):
     if fp == os.path.realpath(PROJECTS) or os.path.isdir(fp): raise ValueError("path muss eine Datei sein, z.B. projekt/datei.py")
@@ -1484,6 +1546,7 @@ def t_run(a, cfg):
     cmd = str(a.get("command") or "").strip()
     if not cmd: raise ValueError("command fehlt")
     if TOKRX.search(cmd): raise ValueError(TOKMSG)
+    if GITBLOCK.search(cmd): raise ValueError(GITMSG)
     cwd = ppath(a.get("cwd"), True)
     if not os.path.isdir(cwd): raise ValueError("cwd muss ein Ordner sein")
     try: t = max(5, min(int(a.get("timeout") or 120), 600))
@@ -1498,6 +1561,16 @@ def t_clone(a, cfg):
         if _origin(dst) != repo: raise ValueError(f"Ordner {name} gehoert zu einem anderen Repo")
         code, cur = git(["rev-parse", "--abbrev-ref", "HEAD"], dst)
         code, dirty = git(["status", "--porcelain"], dst)
+        _gitid(dst, cfg)
+        if a.get("fresh"):
+            code, out = git(["fetch", url, br or cur], dst, tok)
+            if code: raise ValueError("fetch: " + clip(out, 800))
+            git(["branch", "-f", "satanic-sicherung", "HEAD"], dst)
+            if dirty: git(["stash", "push", "-u", "-q"], dst)
+            code, out = git(["checkout", "-q", "-B", br or cur, "FETCH_HEAD"], dst)
+            if code: raise ValueError("checkout: " + clip(out, 800))
+            return (f"Projekt {name}: frisch auf den Stand von GitHub gesetzt (Branch {br or cur}). Deine vorherigen lokalen Commits liegen im Zweig satanic-sicherung"
+                    + (", ungesicherte Aenderungen im git stash" if dirty else "") + ".")
         if br and br != cur:
             if dirty: raise ValueError(f"Ordner {name} hat ungesicherte Aenderungen auf Branch {cur}. Erst git_push oder Aenderungen verwerfen.")
             code, out = git(["fetch", "--depth", "50", url, br], dst, tok)
@@ -1505,9 +1578,9 @@ def t_clone(a, cfg):
             code, out = git(["checkout", "-B", br, "FETCH_HEAD"], dst)
             if code: raise ValueError("checkout: " + clip(out, 800))
             return f"Projekt {name}: auf Branch {br} gewechselt und aktualisiert."
-        code, out = git(["pull", "--ff-only", url, cur], dst, tok)
-        if code: return f"Projekt {name} (Branch {cur}) ist vorhanden, Aktualisieren ging nicht: {clip(out, 600)}"
-        return f"Projekt {name} (Branch {cur}) ist vorhanden und aktuell." + (" Es gibt ungesicherte lokale Aenderungen." if dirty else "")
+        try: sy = _sync(dst, url, cur, tok)
+        except ValueError as e: return f"Projekt {name} (Branch {cur}) ist vorhanden, Aktualisieren ging nicht: {e}"
+        return f"Projekt {name} (Branch {cur}) ist vorhanden" + (f"; {sy}." if sy else " und aktuell.") + (" Es gibt ungesicherte lokale Aenderungen." if dirty else "")
     if os.path.exists(dst): raise ValueError(f"Ordner {name} existiert schon und ist kein Git-Projekt")
     root = os.path.realpath(PROJECTS); _own(root)
     code, out = git(["clone", "--depth", "50"] + (["--branch", br] if br else []) + [url, name], root, tok)
@@ -1590,13 +1663,32 @@ def t_push(a, cfg):
         if code: raise ValueError("commit: " + clip(out, 800))
     code, br = git(["rev-parse", "--abbrev-ref", "HEAD"], d)
     if code or not branch_ok(br) or br == "HEAD": raise ValueError("kein gueltiger Branch (noch kein Commit?)")
-    code, out = git(["push", GIT_BASE + repo + ".git", f"HEAD:refs/heads/{br}"], d, tok)
-    if code: raise ValueError("push abgelehnt: " + clip(out, 1200))
+    url = GIT_BASE + repo + ".git"; default = ""; sy = None
+    if not created:
+        try: default = gh("GET", "/repos/" + repo, tok).get("default_branch") or ""
+        except ValueError: pass
+        sy = _sync(d, url, br, tok)
+        if sy and nfiles and not a.get("skip_check"):
+            err = prepush(d, changed)
+            if err: raise ValueError("Nach dem Abgleich mit GitHub schlaegt die Pruefung fehl, es wurde NICHTS gepusht (dein Commit liegt nur lokal):\n" + err)
+    work = sy is not None and br == default and _guarded(d, repo, cfg)
     code, sha = git(["rev-parse", "--short", "HEAD"], d)
-    if not nfiles and "up-to-date" in out.lower().replace(" ", "-"): return f"Nichts zu tun: keine Aenderungen, {repo} (Branch {br}) ist schon auf Stand {sha}."
+    if work:
+        code, _x = git(["diff", "--quiet", "FETCH_HEAD", "HEAD"], d)
+        if code == 0: return f"Nichts zu tun: keine Aenderungen gegenueber {repo} (Branch {br}, Stand {sha})."
+        code, out = git(["push", "--force", url, f"HEAD:refs/heads/{WORK}"], d, tok)
+    else:
+        code, out = git(["push", url, f"HEAD:refs/heads/{br}"], d, tok)
+    if code: raise ValueError("push abgelehnt: " + clip(out, 1200))
+    if not work and not nfiles and "up-to-date" in out.lower().replace(" ", "-"): return f"Nichts zu tun: keine Aenderungen, {repo} (Branch {br}) ist schon auf Stand {sha}."
     code, rest = git(["status", "--porcelain"], d); left = [l.strip().split(None, 1)[-1] for l in rest.split("\n") if l.strip()]
-    return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}. Dateien im Commit: " + (", ".join(changed[:15]) + (" ..." if nfiles > 15 else "") if changed else "keine neuen") + ". "
-            + ("NICHT mit gepusht (noch ungesichert): " + ", ".join(left[:10]) + ". " if left else "")
+    info = ((sy + ". " if sy else "") + "Dateien im Commit: " + (", ".join(changed[:15]) + (" ..." if nfiles > 15 else "") if changed else "keine neuen") + ". "
+            + ("NICHT mit gepusht (noch ungesichert): " + ", ".join(left[:10]) + ". " if left else ""))
+    if work:
+        return (f"Gepusht auf den Arbeitszweig {WORK} von {repo}, Commit {sha}. Der Hauptzweig {br} ist geschuetzt und wurde NICHT geaendert. " + info
+                + f"Der Build fuer den Arbeitszweig laeuft jetzt: mit build_status pruefen, fertige Dateien mit get_build holen. Nach {br} uebernehmen kann nur der Nutzer, hier: "
+                + _pr(repo, default, tok, msg.split("\n")[0]) + " . Nenne ihm diesen Link zusammen mit dem Build-Ergebnis.")
+    return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}. " + info
             + "Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen, fertige Dateien mit get_build holen.")
 
 def t_build(a, cfg):
@@ -1628,7 +1720,7 @@ def t_build(a, cfg):
     if run.get("conclusion") == "success":
         try:
             for rel in gh("GET", f"/repos/{repo}/releases?per_page=5", tok):
-                if rel.get("tag_name") == "latest-" + br.replace("/", "-"):
+                if str(rel.get("tag_name") or "").startswith("latest-") and rel.get("target_commitish") == sha:
                     out.append("Release " + rel["tag_name"] + ": " + ", ".join(x.get("name", "") for x in rel.get("assets") or []) + " -> " + (rel.get("html_url") or ""))
         except Exception: pass
     return "\n".join(out)
@@ -1659,7 +1751,7 @@ def t_getbuild(a, cfg):
     got = []; src = ""
     try: rels = gh("GET", f"/repos/{repo}/releases?per_page=10", tok)
     except ValueError: rels = []
-    rel = next((r for r in rels if isinstance(r, dict) and r.get("tag_name") == "latest-" + br.replace("/", "-") and r.get("target_commitish") == sha), None)
+    rel = next((r for r in rels if isinstance(r, dict) and str(r.get("tag_name") or "").startswith("latest-") and r.get("target_commitish") == sha), None)
     if rel:
         for asset in rel.get("assets") or []:
             if str(asset.get("name", "")).lower().endswith(exts):
@@ -1710,9 +1802,9 @@ def guide(name):
             except Exception: pass
     return ""
 
-DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "write_file": t_write, "edit_file": t_edit, "search": t_search,
+DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "outline": t_outline, "write_file": t_write, "edit_file": t_edit, "search": t_search,
           "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild, "send_file": t_sendfile, "use_upload": t_upload, "build_rerun": t_rerun}
-DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
+DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "outline": ("Gliederung", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
              "search": ("Suche", "pattern"), "run": ("Fuehre aus", "command"), "git_clone": ("Hole Repo", "repo"), "git_push": ("Commit + Push", "message"),
              "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project"), "send_file": ("Uebergebe Datei", "path"), "use_upload": ("Uebernehme Anhang", "id"), "build_rerun": ("Starte Build neu", "project")}
 def _fn(name, desc, props, req):
@@ -1724,6 +1816,8 @@ DEV_TOOLS = [
  _fn("list_files", "Listet Dateien im Projektordner oder einem Unterordner.", {"path": _S("Ordner relativ zum Projektordner, z.B. MeinProjekt/src. Leer = alles")}, []),
  _fn("read_file", "Liest eine Textdatei mit Zeilennummern (hoechstens 400 Zeilen pro Aufruf).",
      {"path": _S("Dateipfad, z.B. MeinProjekt/app.py"), "start": {"type": "integer", "description": "erste Zeile, Standard 1"}, "lines": {"type": "integer", "description": "Anzahl Zeilen, Standard 250"}}, ["path"]),
+ _fn("outline", "Zeigt die Gliederung einer Datei: Funktionen, Klassen, Abschnitte mit Zeilennummern. Bei grossen Dateien zuerst das, dann gezielt read_file.",
+     {"path": _S("Dateipfad"), "filter": _S("nur Zeilen mit diesem Text (optional)"), "start": {"type": "integer", "description": "ab dieser Zeile (zum Weiterblaettern)"}}, ["path"]),
  _fn("write_file", "Legt eine Projektdatei an oder ueberschreibt sie komplett. Fuer neue Dateien oder komplette Neufassungen.",
      {"path": _S("Dateipfad, z.B. MeinProjekt/app.py"), "content": _S("kompletter Dateiinhalt")}, ["path", "content"]),
  _fn("edit_file", "Ersetzt in einer Datei einen exakten Textabschnitt. Fuer gezielte Aenderungen an vorhandenen Dateien.",
@@ -1734,8 +1828,9 @@ DEV_TOOLS = [
  _fn("run", "Fuehrt einen Shell-Befehl (bash) im Projektordner aus und liefert Ausgabe und Exit-Code. Fuer Syntaxpruefung, Tests, Skripte. Keine Dauerlaeufer oder Server starten.",
      {"command": _S("Shell-Befehl"), "cwd": _S("Arbeitsordner relativ zum Projektordner"), "timeout": {"type": "integer", "description": "Sekunden, Standard 120, hoechstens 600"}}, ["command"]),
  _fn("git_clone", "Holt ein GitHub-Repo in den Projektordner oder aktualisiert es, wenn es schon da ist. Ohne Angaben wird das in den Einstellungen hinterlegte Repo genommen.",
-     {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard")}, []),
- _fn("git_push", "Committet Aenderungen eines Projekts und pusht sie zu GitHub (aktueller Branch). Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt.",
+     {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard"),
+      "fresh": {"type": "boolean", "description": "lokalen Stand verwerfen und exakt den Stand von GitHub holen (nach einem Konflikt); lokale Commits bleiben im Zweig satanic-sicherung"}}, []),
+ _fn("git_push", "Committet Aenderungen eines Projekts, gleicht selbst mit GitHub ab und pusht. Bei Projekten mit Build geht der Push auf den Arbeitszweig satanic-dev, nicht auf den Hauptzweig. Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt.",
      {"project": _S("Projektordner, z.B. Satanic-AI"), "message": _S("kurze Commit-Nachricht"), "files": {"type": "array", "items": {"type": "string"}, "description": "nur diese Dateien pushen (Pfade relativ zum Projekt)"},
       "skip_check": {"type": "boolean", "description": "Syntaxpruefung vor dem Push auslassen. Nur wenn sie nachweislich falsch liegt."},
       "repo": _S("nur fuer neue Projekte: besitzer/name")}, ["project", "message"]),
@@ -1756,7 +1851,7 @@ def dev_prompt(cfg):
     except Exception: projs = []
     return (
      " DEV-MODUS IST AKTIV: Du arbeitest zusaetzlich als Programmier-Agent mit eigenem Projektordner auf dem Server. Alle Pfade sind relativ dazu, z.B. 'Satanic-AI/app.html'. "
-     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build, send_file, use_upload, build_rerun. "
+     "Zusaetzliche Werkzeuge: note, list_files, outline, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build, send_file, use_upload, build_rerun. "
      "Ein Bild oder Dokument aus dem Chat holst du mit use_upload ins Projekt; suche nie selbst auf dem Server danach. git_push prueft vor dem Push die Syntax der geaenderten Dateien und lehnt bei Fehlern ab. "
      "DATEIEN AN DEN NUTZER: create_file kann NUR Text und PDF aus Text erzeugen, den du selbst schreibst; niemals ZIP, Bilder oder andere Binaerdateien damit uebergeben. "
      "Eine Datei, die im Projektordner schon existiert (auch ein mit run gebautes ZIP), uebergibst du mit send_file. Will der Nutzer ipa, apk und exe in einem ZIP: get_build mit zip=true. "
@@ -1764,10 +1859,12 @@ def dev_prompt(cfg):
      "Will der Nutzer die fertige ipa, apk oder exe haben: nach erfolgreichem build_status get_build aufrufen, dann erscheinen die Dateien bei ihm als Download. Lade Build-Dateien nie selbst mit curl oder gh herunter und pruefe ihren Inhalt nicht. "
      "Schreibe NIE einen Zugangs-Token (ghp_..., github_pat_...) in einen Befehl, eine Datei oder eine Notiz, auch wenn er im Chat steht; die GitHub-Werkzeuge nutzen den hinterlegten Token von selbst. "
      "Pruefe vor git_push mit 'git status --short', dass nur gewollte Dateien geaendert sind, oder gib bei git_push files an. "
+     "git_clone und git_push gleichen selbst mit GitHub ab: nutze in run nie git push, pull, fetch, merge oder rebase und fasse Zugangsdaten nicht an. "
+     "Bei Projekten mit Build pusht git_push auf den Arbeitszweig satanic-dev; in den Hauptzweig uebernehmen kann nur der Nutzer ueber den Link, den git_push nennt. "
      f"Du hast pro Runde hoechstens {MAX_ITER_DEV} Werkzeug-Schritte, geh sparsam damit um. "
      "ARBEITSWEISE: 0) Bei groesseren Auftraegen zuerst einen kurzen Plan mit note festhalten, dann Punkt fuer Punkt umsetzen. Beginne nach wenigen Lese-Schritten mit den Aenderungen, statt immer weiter zu suchen. "
      "Halte mit note fest, was du gefunden hast (Datei, Zeile, Funktionsname), denn aeltere Werkzeug-Ausgaben werden gekuerzt. Wiederhole keinen Befehl, den du schon ausgefuehrt hast. "
-     "Lies Dateien mit read_file (bis 400 Zeilen pro Aufruf) und suche mit search, nicht mit sed oder grep in kleinen Stuecken. Rate keine Dateipfade: nimm nur Pfade aus list_files, search oder den Projekt-Hinweisen. "
+     "Lies grosse Dateien nie komplett: erst outline (Gliederung mit Zeilennummern) oder search, dann read_file gezielt ab der Zeile; nicht mit sed oder grep in kleinen Stuecken. Rate keine Dateipfade: nimm nur Pfade aus list_files, search oder den Projekt-Hinweisen. "
      "read_file liest nur im Projektordner, nicht in /tmp. Hilfsdateien gehoeren in den Unterordner _tmp des Projekts (wird nicht gepusht), nie direkt ins Projekt. "
      "1) Erst ansehen, dann aendern: list_files und read_file bzw. search, bevor du eine vorhandene Datei aenderst. "
      "2) Vorhandene Dateien gezielt mit edit_file aendern (old exakt aus der Datei, ohne Zeilennummern); write_file nur fuer neue Dateien oder komplette Neufassungen. "

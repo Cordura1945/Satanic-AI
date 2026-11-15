@@ -20,6 +20,9 @@
 - Nach jeder Aenderung pruefen: run mit "python3 tools/build_setup.py --check" im Projektordner.
 - Das Setup-Skript hat eine Groessengrenze (die Pruefung nennt sie). Wird sie ueberschritten, startet kein Pod mehr. chat/server.py und chat/index.html deshalb schlank halten: nichts Unnoetiges einbauen, keine grossen eingebetteten Daten.
 - Fertig heisst: git_push, danach build_status. Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
+- git_push geht hier auf den Arbeitszweig satanic-dev, nie auf main. Der Build dazu liegt im Release latest-satanic-dev. Nach main uebernehmen kann nur der Nutzer ueber den Link, den git_push nennt.
+- In run kein git push, pull, fetch, merge oder rebase: git_clone holt den neuesten Stand, git_push gleicht selbst ab. Bei einem Konflikt: git_clone mit fresh=true, dann die Aenderung neu einbauen.
+- .github/workflows nur aendern, wenn der Nutzer es ausdruecklich verlangt.
 - Will der Nutzer die fertige ipa, apk oder exe: get_build aufrufen (alle drei in einem ZIP: zip=true). Nie selbst mit curl oder gh herunterladen.
 - Vorhandene Dateien (ZIP, Bilder, Binaerdateien) mit send_file uebergeben. create_file kann nur Text und PDF.
 - Build-Dateien nicht entpacken oder pruefen. Icons in einer ipa liegen in einem Apple-eigenen PNG-Format, das sich hier nicht lesen laesst. Ein erfolgreicher Build ist der Nachweis.
@@ -33,5 +36,5 @@
 - Aenderungen an chat/server.py sind heikel: ein Fehler legt den Chat lahm. Kleine Schritte, nach jedem Schritt pruefen.
 - Build ohne Code-Fehler gescheitert (Aussetzer bei GitHub): build_rerun statt eines leeren Commits.
 - Loeschen, Verschieben, Umbenennen: mit run (rm, mv). Letzten Commit zuruecknehmen: run "git revert --no-edit HEAD", danach git_push.
-- Grosse Dateien stueckweise lesen: erst search nach dem Funktionsnamen, dann read_file ab der gefundenen Zeile.
+- Grosse Dateien (chat/server.py, chat/index.html, KIStart.swift, app.html) nie komplett lesen: erst outline oder search, dann read_file ab der gefundenen Zeile. Funde mit note festhalten.
 - chat/server.py darf nur die Python-Standardbibliothek nutzen (auf dem Pod wird nichts nachinstalliert).
