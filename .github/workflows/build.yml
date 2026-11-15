@@ -29,6 +29,8 @@ jobs:
         echo ''{"images":[{"filename":"logo.png","idiom":"universal"}],"info":{"author":"xcode","version":1}}'' > Assets.xcassets/Logo.imageset/Contents.json
 
         '
+    - name: Setup-Skript komprimieren
+      run: gzip -9 -n -c setup_all.sh > setup_all.sh.gz
     - name: XcodeGen installieren
       run: brew install xcodegen
     - name: Projekt erzeugen
@@ -70,7 +72,7 @@ jobs:
 
         cp bg.jpg splash.mp4 www/
 
-        echo "window.SETUP_B64=''$(base64 -w0 setup_all.sh)''" > www/setup.js
+        echo "window.SETUP_B64=''$(gzip -9 -n -c setup_all.sh | base64 -w0)''" > www/setup.js
 
         '
     - run: npm install
@@ -114,7 +116,7 @@ jobs:
 
         cp bg.jpg splash.mp4 www/
 
-        echo "window.SETUP_B64=''$(base64 -w0 setup_all.sh)''" > www/setup.js
+        echo "window.SETUP_B64=''$(gzip -9 -n -c setup_all.sh | base64 -w0)''" > www/setup.js
 
         '
     - run: npm install

@@ -81,7 +81,7 @@ struct RunPod {
     }
 
     static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0) -> String {
-        let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
+        let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
         let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
@@ -124,6 +124,7 @@ final class Model: ObservableObject {
     @Published var dc: String { didSet { UserDefaults.standard.set(dc, forKey: "dc") } }
     @Published var volId: String? = nil
     @Published var volInfo = ""
+    @Published var volDC = ""
     @Published var maxPrice: Double { didSet { UserDefaults.standard.set(maxPrice, forKey: "maxPrice") } }
 
     @Published var balance: Double? = nil
@@ -289,7 +290,8 @@ final class Model: ObservableObject {
                 volId = v["id"] as? String
                 let sz = (v["size"] as? NSNumber)?.intValue ?? 0
                 volInfo = "\(sz) GB · \(v["dataCenterId"] as? String ?? "?") · ca. $\(String(format: "%.2f", Double(sz) * 0.07))/Monat"
-            } else { volId = nil; volInfo = "" }
+                volDC = v["dataCenterId"] as? String ?? ""
+            } else { volId = nil; volInfo = ""; volDC = "" }
             let pods = me["pods"] as? [[String: Any]] ?? []
             guard let pod = pods.first(where: { ($0["name"] as? String) == "ki-chat" && ($0["desiredStatus"] as? String) == "RUNNING" }),
                   let id = pod["id"] as? String else {
@@ -347,7 +349,7 @@ final class Model: ObservableObject {
             message = "RunPod- oder Vast.ai-Key und Hugging-Face-Token eintragen."
             return
         }
-        guard let url = Bundle.main.url(forResource: "setup_all", withExtension: "sh"),
+        guard let url = Bundle.main.url(forResource: "setup_all.sh", withExtension: "gz"),
               let data = try? Data(contentsOf: url) else {
             message = "setup_all.sh fehlt im App-Paket."
             return
@@ -422,7 +424,7 @@ final class Model: ObservableObject {
                                 "cuda_max_good": ["gte": 12.8], "inet_down": ["gte": 300], "reliability": ["gte": 0.95],
                                 "order": [["dph_total", "asc"]], "type": "on-demand", "limit": 8]
         if maxPrice > 0 { q["dph_total"] = ["lte": maxPrice] }
-        let onstart = "mkdir -p /workspace\necho \"$SETUP_B64\" | base64 -d > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n"
+        let onstart = "mkdir -p /workspace\necho \"$SETUP_B64\" | base64 -d | gunzip > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n"
         let env: [String: Any] = ["HF_TOKEN": hfToken, "AUTO_STOP_H": String(autoStop), "IDLE_STOP_MIN": String(idleStop), "SETUP_B64": b64, "-p 8000:8000": "1"]
         do {
             let (code, o) = try await v.req("POST", "/bundles/", q)
@@ -596,46 +598,61 @@ struct SafariView: UIViewControllerRepresentable {
 }
 
 enum Theme {
-    static let gold = Color(red: 0.89, green: 0.69, blue: 0.29)
-    static let red = Color(red: 0.90, green: 0.28, blue: 0.22)
+    static let gold = Color(red: 0.90, green: 0.69, blue: 0.23)
+    static let red = Color(red: 0.88, green: 0.34, blue: 0.31)
+    static let green = Color(red: 0.29, green: 0.82, blue: 0.50)
+    static let blue = Color(red: 0.35, green: 0.65, blue: 0.88)
+    static let gray = Color(red: 0.54, green: 0.54, blue: 0.59)
+    static let dim = Color(red: 0.23, green: 0.23, blue: 0.27)
+    static let line = Color(red: 0.17, green: 0.17, blue: 0.21)
+    static let panel = Color(red: 0.07, green: 0.07, blue: 0.09)
+    static let bar = Color(red: 0.10, green: 0.10, blue: 0.13)
+    static let rose = Color(red: 0.62, green: 0.19, blue: 0.19)
     static let card = Color(red: 0.11, green: 0.05, blue: 0.07)
     static let bgTop = Color(red: 0.03, green: 0.02, blue: 0.05)
     static let bgBottom = Color(red: 0.16, green: 0.03, blue: 0.04)
+    static func mono(_ size: CGFloat, bold: Bool = false) -> Font {
+        Font.system(size: size, weight: bold ? .bold : .regular, design: .monospaced)
+    }
 }
 
 struct Card<Content: View>: View {
     var selected = false
     @ViewBuilder var content: Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) { content }
-            .padding(16)
+        VStack(alignment: .leading, spacing: 9) { content }
+            .padding(13)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.58)))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(selected ? Theme.gold : Theme.gold.opacity(0.25), lineWidth: selected ? 2 : 1))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.45)))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(selected ? Theme.green : Theme.line, lineWidth: selected ? 1.5 : 1))
     }
 }
 
 struct Field: ViewModifier {
     func body(content: Content) -> some View {
-        content.padding(10).background(RoundedRectangle(cornerRadius: 10).fill(Color.black.opacity(0.6)))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.gold.opacity(0.3), lineWidth: 1))
+        content.padding(10).font(Theme.mono(13)).background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.55)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line, lineWidth: 1))
     }
 }
 
 struct ProgressBar: View {
     let value: Double
     var eta: String = ""
+    var barText: Text {
+        let v = min(max(value, 0), 100)
+        let n = 24
+        let f = Int((v / 100 * Double(n)).rounded())
+        let a: Text = Text("[").foregroundColor(Theme.gray)
+        let b: Text = Text(String(repeating: "#", count: f)).foregroundColor(Theme.red)
+        let c: Text = Text(String(repeating: "-", count: n - f)).foregroundColor(Theme.dim)
+        let d: Text = Text("] ").foregroundColor(Theme.gray)
+        let e: Text = Text("\(Int(v))%").foregroundColor(Theme.gold)
+        return a + b + c + d + e
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { g in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.15))
-                    Capsule().fill(LinearGradient(colors: [Theme.red, Theme.gold], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: g.size.width * CGFloat(min(max(value, 0), 100) / 100))
-                }
-            }.frame(height: 10)
-            .animation(.easeInOut(duration: 0.6), value: value)
-            Text("\(Int(value)) %" + (eta.isEmpty ? "" : " · \(eta)")).font(.footnote.bold()).foregroundColor(Theme.gold)
+        VStack(alignment: .leading, spacing: 5) {
+            barText.font(Theme.mono(14, bold: true)).lineLimit(1).minimumScaleFactor(0.6)
+            if !eta.isEmpty { Text(eta).font(Theme.mono(12)).foregroundColor(Theme.gray) }
         }
     }
 }
@@ -646,9 +663,10 @@ struct GoldButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(title).font(.headline).foregroundColor(danger ? .white : .black)
-                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                .background(RoundedRectangle(cornerRadius: 14).fill(danger ? AnyShapeStyle(Theme.red) : AnyShapeStyle(LinearGradient(colors: [Theme.gold, Color(red: 0.72, green: 0.48, blue: 0.16)], startPoint: .top, endPoint: .bottom))))
+            Text("[ " + title + " ]").font(Theme.mono(16, bold: true)).foregroundColor(danger ? Theme.red : Theme.green)
+                .frame(maxWidth: .infinity).padding(.vertical, 13)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.5)))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(danger ? Theme.red : Theme.green, lineWidth: 1.5))
         }
     }
 }
@@ -721,122 +739,169 @@ struct ContentView: View {
 
     var volMonth: String { String(format: "%.2f", Double(m.volGB) * 0.07) }
 
+    static let banner = " ███████  █████  ████████  █████  ███    ██ ██  ██████\n ██      ██   ██    ██    ██   ██ ████   ██ ██ ██     \n ███████ ███████    ██    ███████ ██ ██  ██ ██ ██     \n      ██ ██   ██    ██    ██   ██ ██  ██ ██ ██ ██     \n ███████ ██   ██    ██    ██   ██ ██   ████ ██  ██████"
+
+    var promptLine: Text {
+        let a: Text = Text("root@satanic").foregroundColor(Theme.green)
+        let b: Text = Text(":").foregroundColor(Theme.gray)
+        let c: Text = Text("~").foregroundColor(Theme.blue)
+        let d: Text = Text("$ ").foregroundColor(Theme.gray)
+        let e: Text = Text("./start.sh").foregroundColor(.white)
+        return a + b + c + d + e
+    }
+
+    var statusColor: Color { (m.phase == .none || m.phase == .ready) ? Theme.green : Theme.gold }
+
     func modeCard(_ id: String, _ name: String, _ text: String) -> some View {
         Button { m.mode = id } label: {
             Card(selected: m.mode == id) {
-                HStack {
-                    Image(systemName: m.mode == id ? "largecircle.fill.circle" : "circle").foregroundColor(Theme.gold)
-                    Text(name).font(.headline).foregroundColor(.white)
+                HStack(spacing: 8) {
+                    Text(m.mode == id ? "(*)" : "( )").font(Theme.mono(15, bold: true)).foregroundColor(m.mode == id ? Theme.green : Theme.gray)
+                    Text(name).font(Theme.mono(15, bold: true)).foregroundColor(.white)
                     Spacer()
                 }
-                Text(text).font(.footnote).foregroundColor(.white.opacity(0.9)).multilineTextAlignment(.leading)
+                Text(text).font(Theme.mono(11.5)).foregroundColor(Theme.gray).multilineTextAlignment(.leading)
             }
         }.buttonStyle(.plain)
     }
 
+    var settingsBlock: some View {
+        DisclosureGroup(isExpanded: $showSettings) {
+            VStack(alignment: .leading, spacing: 12) {
+                DisclosureGroup("API-Keys erstellen") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("RunPod: Konto anlegen, Guthaben aufladen, dann im Bereich Settings oder Credentials einen API-Key erstellen (Rechte: Lesen und Schreiben). Der Key beginnt mit rpa_.")
+                        Link(destination: URL(string: "https://console.runpod.io/user/settings")!) {
+                            Text("[>] RunPod öffnen").foregroundColor(Theme.gold)
+                        }
+                        Text("Hugging Face: Konto anlegen, dann unter Settings → Access Tokens ein Token mit Leserechten (Read) erstellen. Es beginnt mit hf_. Damit lädt der Pod die Modelle.")
+                        Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
+                            Text("[>] Hugging Face öffnen").foregroundColor(Theme.gold)
+                        }
+                        Text("Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im Schlüsselbund dieses iPhones.")
+                            .foregroundColor(Theme.gray)
+                    }.padding(.top, 6)
+                }.tint(Theme.gold)
+                SecureField("RunPod API-Key", text: $m.apiKey).modifier(Field())
+                SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
+                SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
+                Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
+                Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
+                Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
+                Stepper("Disk: \(m.disk) GB", value: $m.disk, in: 60...300, step: 10)
+                TextField("Rechenzentrum (nur Volume)", text: $m.dc).modifier(Field()).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                TextField("Docker-Image", text: $m.image).modifier(Field()).textInputAutocapitalization(.never).autocorrectionDisabled()
+            }.padding(.top, 8).foregroundColor(.white).font(Theme.mono(12))
+        } label: {
+            Text("> EINSTELLUNGEN").font(Theme.mono(12, bold: true)).foregroundColor(Theme.green)
+        }
+        .tint(Theme.gold)
+        .padding(13)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.45)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line, lineWidth: 1))
+    }
+
+    var podBlock: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if m.phase == .none {
+                Text("> STARTART WÄHLEN").font(Theme.mono(12, bold: true)).foregroundColor(Theme.green)
+                modeCard("demand", "On Demand",
+                         "Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.")
+                modeCard("volume", "Network Volume",
+                         "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\((m.volId != nil && !m.volDC.isEmpty) ? m.volDC : m.dc)).")
+                if m.mode == "volume" {
+                    Card {
+                        if m.volId != nil {
+                            Text("Vorhandenes Volume: \(m.volInfo)").font(Theme.mono(12)).foregroundColor(Theme.gray)
+                            Button("[x] Volume löschen", role: .destructive) { confirmVol = true }.font(Theme.mono(12))
+                        } else {
+                            Stepper("Größe: \(m.volGB) GB (ca. $\(volMonth)/Monat)", value: $m.volGB, in: 50...300, step: 10)
+                                .foregroundColor(.white).font(Theme.mono(12))
+                        }
+                    }
+                }
+                GoldButton(title: m.busy ? "Starte…" : "Starten") { Task { await m.start() } }.disabled(m.busy)
+            } else {
+                Card {
+                    Text(title).font(Theme.mono(17, bold: true)).foregroundColor(m.phase == .ready ? Theme.green : .white)
+                    if !m.info.isEmpty { Text(m.info).font(Theme.mono(11.5)).foregroundColor(Theme.gray) }
+                    ProgressBar(value: m.shown, eta: m.eta)
+                    if !m.step.isEmpty { Text(m.step).font(Theme.mono(12)).foregroundColor(.white.opacity(0.9)) }
+                    if !m.log.isEmpty {
+                        Text(m.log.joined(separator: "\n")).font(Theme.mono(11)).foregroundColor(Theme.gray)
+                    }
+                }
+                if let u = m.chatURL, m.phase == .loading || m.phase == .ready {
+                    GoldButton(title: "Chat öffnen") { web = WebLink(url: u) }
+                }
+                GoldButton(title: "Beenden (Terminate)", danger: true) { confirmStop = true }
+            }
+        }
+    }
+
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            GeometryReader { g in
-                Image("Background").resizable().scaledToFill()
-                    .frame(width: g.size.width, height: g.size.height).clipped()
-            }.ignoresSafeArea()
+            Color(red: 0.035, green: 0.035, blue: 0.045).ignoresSafeArea()
+            RadialGradient(colors: [Color(red: 0.55, green: 0.08, blue: 0.10).opacity(0.34), Color.clear],
+                           center: UnitPoint(x: 0.5, y: 0.12), startRadius: 0, endRadius: 520).ignoresSafeArea()
             if let p = player {
                 PlayerView(player: p).ignoresSafeArea().opacity(videoOpacity).allowsHitTesting(false)
             }
-            ScrollView {
-                VStack(spacing: 16) {
-                    Color.clear.frame(height: 4)
-                    Card {
-                        Text("RUNPOD-GUTHABEN").font(.caption.bold()).foregroundColor(Theme.gold)
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(m.balance.map { String(format: "$%.2f", $0) } ?? "–").font(.system(size: 36, weight: .bold)).foregroundColor(.white)
-                            Spacer()
-                            Text(String(format: "Verbrauch: $%.2f/h", m.spend)).font(.footnote).foregroundColor(.white.opacity(0.85))
-                        }
-                        if let b = m.balance, b < 2 { Text("Guthaben niedrig, bitte aufladen.").font(.footnote).foregroundColor(Theme.red) }
-                        Link(destination: URL(string: "https://console.runpod.io/user/billing")!) {
-                            Label("Guthaben aufladen", systemImage: "plus.circle.fill").foregroundColor(Theme.gold)
-                        }
-                    }
-
-                    if m.phase == .none {
-                        Text("STARTART WÄHLEN").font(.caption.bold()).foregroundColor(Theme.gold).frame(maxWidth: .infinity, alignment: .leading)
-                        modeCard("demand", "On Demand",
-                                 "Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.")
-                        modeCard("volume", "Network Volume",
-                                 "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\(m.dc)).")
-                        if m.mode == "volume" {
-                            Card {
-                                if m.volId != nil {
-                                    Text("Vorhandenes Volume: \(m.volInfo)").font(.footnote).foregroundColor(.white.opacity(0.8))
-                                    Button("Volume löschen", role: .destructive) { confirmVol = true }.font(.footnote)
-                                } else {
-                                    Stepper("Größe: \(m.volGB) GB (ca. $\(volMonth)/Monat)", value: $m.volGB, in: 50...300, step: 10)
-                                        .foregroundColor(.white).font(.footnote)
-                                }
-                            }
-                        }
-                        GoldButton(title: m.busy ? "Starte…" : "Starten") { Task { await m.start() } }.disabled(m.busy)
-                    } else {
-                        Card {
-                            HStack {
-                                Text(title).font(.title3.bold()).foregroundColor(m.phase == .ready ? .green : .white)
-                                Spacer()
-                                Text(m.info).font(.footnote).foregroundColor(.white.opacity(0.85))
-                            }
-                            ProgressBar(value: m.shown, eta: m.eta)
-                            if !m.step.isEmpty { Text(m.step).font(.footnote).foregroundColor(.white.opacity(0.9)) }
-                            if !m.log.isEmpty {
-                                Text(m.log.joined(separator: "\n")).font(.system(size: 11, design: .monospaced)).foregroundColor(.white.opacity(0.8))
-                            }
-                        }
-                        if let u = m.chatURL, m.phase == .loading || m.phase == .ready {
-                            GoldButton(title: "Chat öffnen") { web = WebLink(url: u) }
-                        }
-                        GoldButton(title: "Beenden (Terminate)", danger: true) { confirmStop = true }
-                    }
-                    if !m.message.isEmpty { Text(m.message).font(.footnote).foregroundColor(.white.opacity(0.85)).frame(maxWidth: .infinity, alignment: .leading) }
-
-                    DisclosureGroup(isExpanded: $showSettings) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            DisclosureGroup("API-Keys erstellen") {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("RunPod: Konto anlegen, Guthaben aufladen, dann im Bereich Settings oder Credentials einen API-Key erstellen (Rechte: Lesen und Schreiben). Der Key beginnt mit rpa_.")
-                                    Link(destination: URL(string: "https://console.runpod.io/user/settings")!) {
-                                        Label("RunPod öffnen", systemImage: "arrow.up.right.square").foregroundColor(Theme.gold)
-                                    }
-                                    Text("Hugging Face: Konto anlegen, dann unter Settings → Access Tokens ein Token mit Leserechten (Read) erstellen. Es beginnt mit hf_. Damit lädt der Pod die Modelle.")
-                                    Link(destination: URL(string: "https://huggingface.co/settings/tokens")!) {
-                                        Label("Hugging Face öffnen", systemImage: "arrow.up.right.square").foregroundColor(Theme.gold)
-                                    }
-                                    Text("Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im Schlüsselbund dieses iPhones.")
-                                        .foregroundColor(.white.opacity(0.7))
-                                }.padding(.top, 6)
-                            }.tint(Theme.gold)
-                            SecureField("RunPod API-Key", text: $m.apiKey).modifier(Field())
-                            SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
-                            SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
-                            Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
-                            Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
-                            Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
-                            Stepper("Disk: \(m.disk) GB", value: $m.disk, in: 60...300, step: 10)
-                            TextField("Rechenzentrum (nur Volume)", text: $m.dc).modifier(Field()).textInputAutocapitalization(.characters).autocorrectionDisabled()
-                            TextField("Docker-Image", text: $m.image).modifier(Field()).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        }.padding(.top, 8).foregroundColor(.white).font(.footnote)
-                    } label: {
-                        Text("EINSTELLUNGEN").font(.caption.bold()).foregroundColor(Theme.gold)
-                    }
-                    .tint(Theme.gold)
-                    .padding(16)
-                    .background(RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.58)))
-                    .overlay(RoundedRectangle(cornerRadius: 18).stroke(Theme.gold.opacity(0.25), lineWidth: 1))
-                    .padding(.top, 8)
+            VStack(spacing: 0) {
+                HStack(spacing: 7) {
+                    Circle().fill(Theme.red).frame(width: 11, height: 11)
+                    Circle().fill(Theme.gold).frame(width: 11, height: 11)
+                    Circle().fill(Theme.green).frame(width: 11, height: 11)
+                    Spacer()
+                    Text("satanic — python3").font(Theme.mono(12)).foregroundColor(Theme.gray)
+                    Spacer()
+                    Color.clear.frame(width: 47, height: 11)
                 }
-                .padding(.horizontal, 16).padding(.bottom, 40)
+                .padding(.horizontal, 14).padding(.vertical, 11)
+                .background(Theme.bar)
+                Rectangle().fill(Theme.line).frame(height: 1)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        promptLine.font(Theme.mono(14))
+                        Card {
+                            Text("> RUNPOD-GUTHABEN").font(Theme.mono(12, bold: true)).foregroundColor(Theme.green)
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(m.balance.map { String(format: "$%.2f", $0) } ?? "–").font(Theme.mono(34, bold: true)).foregroundColor(Theme.gold)
+                                Spacer()
+                                Text(String(format: "Verbrauch: $%.2f/h", m.spend)).font(Theme.mono(12)).foregroundColor(Theme.gray)
+                            }
+                            if let b = m.balance, b < 2 { Text("Guthaben niedrig, bitte aufladen.").font(Theme.mono(12)).foregroundColor(Theme.red) }
+                            Link(destination: URL(string: "https://console.runpod.io/user/billing")!) {
+                                Text("[+] Guthaben aufladen").font(Theme.mono(14)).foregroundColor(Theme.gold)
+                            }
+                        }
+                        podBlock
+                        if !m.message.isEmpty { Text(m.message).font(Theme.mono(12)).foregroundColor(Theme.gray).frame(maxWidth: .infinity, alignment: .leading) }
+                        settingsBlock
+                        VStack(spacing: 6) {
+                            Text(ContentView.banner).font(Theme.mono(8, bold: true)).foregroundColor(Theme.rose).lineLimit(5).minimumScaleFactor(0.5)
+                            Text("uncensored ai · runpod").font(Theme.mono(10)).foregroundColor(Theme.dim)
+                        }
+                        .frame(maxWidth: .infinity).padding(.top, 12)
+                    }
+                    .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 30)
+                }
+                .scrollDismissesKeyboard(.immediately)
+                .onTapGesture { hideKeyboard() }
+                Rectangle().fill(Theme.line).frame(height: 1)
+                HStack(spacing: 8) {
+                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                    Text(title.lowercased()).font(Theme.mono(12, bold: true)).foregroundColor(statusColor)
+                    Spacer()
+                    Text(String(format: "$%.2f/h", m.spend)).font(Theme.mono(12)).foregroundColor(Theme.gold)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .background(Theme.bar)
             }
-            .scrollDismissesKeyboard(.immediately)
-            .onTapGesture { hideKeyboard() }
+            .background(Theme.panel.opacity(0.94))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Theme.line, lineWidth: 1))
+            .padding(.horizontal, 8).padding(.vertical, 4)
             .opacity(uiOpacity)
             .offset(y: (1 - uiOpacity) * 24)
             .allowsHitTesting(uiOpacity > 0.8)

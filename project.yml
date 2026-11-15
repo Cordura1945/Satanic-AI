@@ -9,7 +9,7 @@ targets:
     platform: iOS
     sources:
       - path: KIStart.swift
-      - path: setup_all.sh
+      - path: setup_all.sh.gz
         buildPhase: resources
       - path: splash.mp4
         buildPhase: resources

@@ -103,7 +103,7 @@ async function rest(method,path,body){
 }
 const q=JSON.stringify;
 function deploy(gpu,vol,dcid,b64){
-  const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
+  const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
   const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}]`;
   let v="";if(vol){v=`networkVolumeId:${q(vol)},`;if(dcid)v+=`dataCenterId:${q(dcid)},`}
   return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:${parseInt(g("disk"))||100},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
@@ -161,7 +161,7 @@ async function startVast(b64,errs){
   const disk=parseInt(g("disk"))||100,maxP=parseFloat(g("maxPrice"))||0;
   const qy={verified:{eq:true},rentable:{eq:true},rented:{eq:false},num_gpus:{eq:1},gpu_ram:{gte:44000},disk_space:{gte:disk},direct_port_count:{gte:1},cuda_max_good:{gte:12.8},inet_down:{gte:300},reliability:{gte:0.95},order:[["dph_total","asc"]],type:"on-demand",limit:8};
   if(maxP>0)qy.dph_total={lte:maxP};
-  const onstart='mkdir -p /workspace\necho "$SETUP_B64" | base64 -d > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n';
+  const onstart='mkdir -p /workspace\necho "$SETUP_B64" | base64 -d | gunzip > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n';
   const env={HF_TOKEN:g("hfToken"),AUTO_STOP_H:String(g("autoStop")),IDLE_STOP_MIN:String(g("idleStop")),SETUP_B64:b64,"-p 8000:8000":"1"};
   try{
     const {code,obj}=await vast("POST","/bundles/",qy);
