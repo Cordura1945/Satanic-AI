@@ -131,3 +131,26 @@ jobs:
       with:
         name: ${{ env.APP_NAME }}-exe
         path: out/
+  release:
+    needs: [iphone, android, windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - uses: actions/download-artifact@v4
+      with:
+        path: dl
+    - name: Release mit ipa, apk und exe aktualisieren
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        TAG="latest-${GITHUB_REF_NAME//\//-}"
+        mapfile -t FILES < <(find dl -type f \( -name '*.ipa' -o -name '*.apk' -o -name '*.exe' \) | sort)
+        if [ ${#FILES[@]} -eq 0 ]; then echo "Keine Build-Dateien gefunden"; exit 1; fi
+        printf '%s\n' "${FILES[@]}"
+        gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
+        gh release create "$TAG" "${FILES[@]}" --target "$GITHUB_SHA" \
+          --title "$APP_NAME ($GITHUB_REF_NAME) - Build #$GITHUB_RUN_NUMBER" \
+          --notes "Automatisch gebaut aus $GITHUB_SHA (Branch $GITHUB_REF_NAME, Run $GITHUB_RUN_ID)."
