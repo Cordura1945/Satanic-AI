@@ -105,13 +105,14 @@ header button{border:1px solid var(--line);background:#14141b;color:#8a8a96;bord
 #th{color:#e6b13a}
 #back{font-size:16px;padding:5px 10px}
 header b{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:16px}
+#ctx{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--mut);cursor:pointer;margin-right:4px;white-space:nowrap}
 .dl{display:block;margin:0 0 10px;font-size:13px;color:var(--mut)}.dl input{display:block;width:100%;box-sizing:border-box;margin-top:4px;background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px;font-family:inherit}
 </style></head><body><div id="fxbg"></div><div id="fxsl"></div><div id="boot"><div class="pwr">⏻</div><pre class="bn"> ███████  █████  ████████  █████  ███    ██ ██  ██████
  ██      ██   ██    ██    ██   ██ ████   ██ ██ ██     
  ███████ ███████    ██    ███████ ██ ██  ██ ██ ██     
       ██ ██   ██    ██    ██   ██ ██  ██ ██ ██ ██     
  ███████ ██   ██    ██    ██   ██ ██   ████ ██  ██████</pre><div class="hint">▶ tippen zum Starten</div><div class="log"></div></div><div id="app">
-<header><button id="back" style="display:none">‹ App</button><button id="menu">≡</button><span class="av"></span><b>satanic</b><button id="th" title="Hell/Dunkel">◐</button><button id="new">+ neu</button></header>
+<header><button id="back" style="display:none">‹ App</button><button id="menu">≡</button><span class="av"></span><b>satanic</b><span id="ctx" title="Chat-Füllstand"><svg viewBox="0 0 24 24" width="22" height="22"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="3"/><circle id="ctxa" cx="12" cy="12" r="9" fill="none" stroke="#3fb950" stroke-width="3" stroke-linecap="round" stroke-dasharray="56.55" stroke-dashoffset="56.55" transform="rotate(-90 12 12)"/></svg><span id="ctxp">0%</span></span><button id="th" title="Hell/Dunkel">◐</button><button id="new">+ neu</button></header>
 <div id="sub"><span id="st"></span><select id="mdl" style="display:none;background:#222;color:#eee;border:1px solid #555;border-radius:8px;padding:2px 4px;font-size:12px"><option value="">27B Qualität</option><option value="fast">9B Schnell</option></select></div>
 <div id="msgs"></div>
 <div class="ov" id="drw"><div class="ovh"><h3>Chats</h3><button id="dgal">🖼 Galerie</button><button id="dx">✕</button></div>
@@ -142,7 +143,7 @@ try{hist=JSON.parse(localStorage.getItem('hist')||'[]')}catch(e){}
 let cid=localStorage.getItem('cid')||'';function newCid(){cid='c_'+[...crypto.getRandomValues(new Uint8Array(4))].map(b=>b.toString(16).padStart(2,'0')).join('');try{localStorage.setItem('cid',cid)}catch(e){}}
 if(!cid)newCid();let svT=null;
 function chatTitle(){const u=hist.find(m=>m.role==='user'&&!m.hidden&&m.text);return u?u.text.replace(/\s+/g,' ').slice(0,40):'Chat'}
-function save(){try{localStorage.setItem('hist',JSON.stringify(hist))}catch(e){}
+function save(){try{localStorage.setItem('hist',JSON.stringify(hist))}catch(e){}ctxUpd();
   clearTimeout(svT);svT=setTimeout(()=>{if(!hist.length)return;fetch('/api/chats/save',{method:'POST',body:JSON.stringify({id:cid,title:chatTitle(),hist})}).catch(()=>{})},800)}
 function el(c,t){const d=document.createElement('div');d.className=c;if(t!=null)d.textContent=t;$('#msgs').appendChild(d);return d}
 function scroll(){const m=$('#msgs');m.scrollTop=m.scrollHeight}
@@ -191,7 +192,7 @@ function actBtns(t,host){const w=document.createElement('div');w.style.cssText='
     try{const r=await fetch('/api/pdf',{method:'POST',body:JSON.stringify({text:t})});const j=await r.json();if(j.error)throw new Error(j.error);
       const ft=fileTag({id:j.id,name:j.name});(host||w.parentNode).appendChild(ft);b.textContent='📄 PDF'}catch(e){b.textContent='📄 PDF';alert('PDF fehlgeschlagen: '+e.message)}};
   w.appendChild(b);return w}
-function render(){
+function render(){setTimeout(ctxUpd,0);
   $('#msgs').innerHTML='';
   if(!hist.length)el('m a',GREETING);
   for(const m of hist){
@@ -292,7 +293,7 @@ if(SR){$('#mic').style.display='';let rec=null,on=false;$('#mic').onclick=()=>{
   try{rec=new SR();rec.lang='de-DE';rec.interimResults=false;rec.onresult=e=>{const t=[...e.results].map(r=>r[0].transcript).join(' ');$('#t').value=($('#t').value+' '+t).trim();$('#t').oninput({target:$('#t')})};
   rec.onend=()=>{on=false;$('#mic').textContent='mic'};rec.onerror=e=>{on=false;$('#mic').textContent='mic';alert('Diktieren nicht verfügbar ('+e.error+'). Nutze das Mikrofon der Tastatur.')};
   rec.start();on=true;$('#mic').textContent='stop'}catch(e){alert('Diktieren nicht verfügbar. Nutze das Mikrofon der Tastatur.')}}}
-$('#go').onclick=send;
+$('#go').onclick=()=>{if(busy)stopJob();else send()};
 $('#t').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!/iPhone|iPad|Android/.test(navigator.userAgent)){e.preventDefault();send()}};
 
 function payload(){
@@ -308,7 +309,11 @@ function estTok(){let c=700;const fast=$('#mdl').value==='fast';let dl=fast?1800
   const withDocs=hist.filter(m=>m.role==='user'&&m.docs&&m.docs.length).slice(-2).reverse();
   withDocs.forEach(m=>m.docs.forEach(d=>{const n=Math.max(0,Math.min(d.chars||0,per,dl));dl-=n;c+=n/3}));
   for(const m of payload()){c+=((m.text||'').length)/3+8;(m.images||[]).forEach(i=>{if(i.thumb)c+=700})}return c}
-function ctxLimit(){const b=$('#mdl').value==='fast'?12500:26000;return $('#othk').checked?Math.round(b*0.78):b}
+function ctxLimit(){const dv=$('#odev').checked,b=$('#mdl').value==='fast'?(dv?6000:12500):(dv?13000:26000);return $('#othk').checked?Math.round(b*0.78):b}
+function ctxUpd(){try{const u=estTok(),l=ctxLimit(),p=Math.max(0,Math.min(1,u/l)),c=2*Math.PI*9,a=$('#ctxa');
+  a.setAttribute('stroke-dashoffset',(c*(1-p)).toFixed(2));a.setAttribute('stroke',p<.6?'#3fb950':p<.85?'#d29922':'#e0564e');$('#ctxp').textContent=Math.round(p*100)+'%'}catch(e){}}
+$('#ctx').onclick=()=>{const u=Math.round(estTok()),l=ctxLimit();const d=el('m a','Chat-Füllstand: ca. '+u.toLocaleString('de-DE')+' von '+l.toLocaleString('de-DE')+' Tokens ('+Math.round(100*u/l)+' %). Bei 100 % fasst Satanic den Chat zusammen und macht automatisch in einem neuen Chat weiter. Im Dev-Modus ist die Grenze niedriger, weil die Werkzeuge Platz brauchen.');scroll();setTimeout(()=>d.remove(),7000)};
+['#odev','#othk','#mdl'].forEach(x=>$(x).addEventListener('change',ctxUpd));
 async function runSummary(msgs){
   let txt='';
   const r=await fetch('/api/chat',{method:'POST',body:JSON.stringify({messages:msgs.concat([{role:'user',text:SUMPROMPT,images:[]}]),fast:$('#mdl').value==='fast',summary:true})});
@@ -323,6 +328,8 @@ async function autoNext(){
   try{sum=await runSummary(payload())}catch(e){}
   if(!sum){try{sum=await runSummary(payload().slice(-8))}catch(e){}}
   if(!sum){note.textContent='⚠️ Zusammenfassung fehlgeschlagen. Tippe auf „Neu", wenn der Chat nicht mehr antwortet.';return}
+  clearTimeout(svT);try{await fetch('/api/chats/save',{method:'POST',body:JSON.stringify({id:cid,title:chatTitle(),hist})})}catch(e){}
+  newCid();
   hist=[{role:'user',text:'[Kontext aus dem vorherigen Chat – Zusammenfassung]\n'+sum,hidden:true,images:[]},
     {role:'assistant',text:'Verstanden, ich mache nahtlos damit weiter.',hidden:true},
     {role:'assistant',banner:true,text:'🔄 Der letzte Chat war fast voll. Ich habe automatisch einen neuen Chat gestartet und die Zusammenfassung übernommen. Du kannst einfach weiterschreiben. Zum Kopieren:\n\n```\n'+sum+'\n```'}];
@@ -330,13 +337,20 @@ async function autoNext(){
 
 async function send(){
   if(busy)return;const text=$('#t').value.trim();if(!text&&!pend.length&&!pendDocs.length)return;
+  if(hist.length>2&&estTok()>ctxLimit()){busy=true;try{await autoNext()}catch(e){}busy=false}
   hist.push({role:'user',text,images:pend.map(p=>({id:p.id})),docs:pendDocs.slice()});
   pend=[];pendDocs=[];chips();$('#t').value='';$('#t').style.height='auto';
   await runAssistant(null)}
 function regen(id){if(busy)return;hist.push({role:'user',text:'[Neues Bild mit anderem Seed zu '+id+' angefordert]',hidden:true,images:[]});runAssistant(id)}
-async function runAssistant(regenId){
-  busy=true;$('#go').disabled=true;
+const nap=ms=>new Promise(r=>setTimeout(r,ms));let curJob=null;const goTxt=$('#go').textContent;
+function jobId(){return 'j_'+[...crypto.getRandomValues(new Uint8Array(8))].map(b=>b.toString(16).padStart(2,'0')).join('')}
+function stopJob(){if(curJob)fetch('/api/job/stop',{method:'POST',body:JSON.stringify({id:curJob})}).catch(()=>{})}
+function goBusy(v){const g=$('#go');g.disabled=false;g.textContent=v?'■':goTxt;g.title=v?'Stoppen':''}
+async function runAssistant(regenId,resumeJid){
+  busy=true;goBusy(true);
   const a={role:'assistant',text:'',images:[],files:[]};hist.push(a);render();
+  const jid=resumeJid||jobId();curJob=jid;try{localStorage.setItem('job',JSON.stringify({jid,cid}))}catch(e){}
+  if(!resumeJid)save();
   const bub=$('#msgs').lastChild;const spin=document.createElement('span');spin.className='sp';bub.prepend(spin);
   const tn=document.createElement('div');tn.className='txt';bub.appendChild(tn);
   const clean=t=>t.replace(/\[(?:Erzeugte|Angeh\w+|Erstellte)[^\]\n]{0,15}(?:Bilder|Dateien)[^\]]*\]\s*/g,'');
@@ -346,13 +360,16 @@ async function runAssistant(regenId){
     shown=Math.min(a.text.length,shown+Math.max(1,Math.ceil(back/40)));rich(tn,clean(a.text).slice(0,Math.max(0,shown)));tn.appendChild(cur);scroll();timer=setTimeout(step,22)}
   function kick(){if(!timer)timer=setTimeout(step,0)}
   try{
-    const body={messages:payload().slice(0,-1),fast:$('#mdl').value==='fast',imgopts:imgopts(),think:$('#othk').checked};if($('#odev').checked&&devKey){body.dev=true;body.devkey=devKey}if(regenId)body.regen=regenId;
-    const r=await fetch('/api/chat',{method:'POST',body:JSON.stringify(body)});
-    const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
-    while(true){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
-      let p;while((p=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,p);buf=buf.slice(p+2);if(!line.startsWith('data:'))continue;
-        const ev=JSON.parse(line.slice(5));
-        if(ev.type==='think'){if(!thk){thk=document.createElement('div');thk.className='tool';thk.textContent='💭 Denkt nach …';bub.insertBefore(thk,tn)}}
+    const body={messages:payload().slice(0,-1),fast:$('#mdl').value==='fast',imgopts:imgopts(),think:$('#othk').checked,job:jid};if($('#odev').checked&&devKey){body.dev=true;body.devkey=devKey}if(regenId)body.regen=regenId;
+    let next=0,fin=false,lost=null,mode=resumeJid?'get':'post',confirmed=!!resumeJid,fails=0;
+    const setLost=v=>{if(v&&!lost){lost=document.createElement('div');lost.className='tool';lost.textContent='⏳ Verbindung unterbrochen – verbinde neu, Satanic arbeitet weiter …';bub.appendChild(lost);scroll()}else if(!v&&lost){lost.remove();lost=null}};
+    const handle=ev=>{
+        if(ev.type==='job'||ev.type==='ping')return;
+        if(ev.i!=null){if(ev.i<next)return;next=ev.i+1}
+        setLost(false);
+        if(ev.type==='done'){fin=true}
+        else if(ev.type==='stopped'){const t=document.createElement('div');t.className='tool';t.textContent='⏹ Gestoppt';bub.appendChild(t)}
+        else if(ev.type==='think'){if(!thk){thk=document.createElement('div');thk.className='tool';thk.textContent='💭 Denkt nach …';bub.insertBefore(thk,tn)}}
         else if(ev.type==='delta'){unthk();a.text+=ev.text;kick()}
         else if(ev.type==='clear'){a.text='';shown=0;rich(tn,'')}
         else if(ev.type==='tool'){unthk();const t=document.createElement('div');t.className='tool';t.textContent=ev.label||((ev.name==='edit_image'?'Bearbeite Bild: ':ev.name==='create_file'?'Erstelle Datei: ':'Erzeuge Bild: ')+ev.prompt);bub.appendChild(t)}
@@ -360,14 +377,32 @@ async function runAssistant(regenId){
         else if(ev.type==='file'){a.files.push({id:ev.id,name:ev.name});bub.appendChild(fileTag(ev))}
         else if(ev.type==='image'){a.images.push(ev.id);bub.appendChild(imgTag(ev.id))}
         else if(ev.type==='error'){const t=document.createElement('div');t.className='tool';t.style.color='#f08a7a';t.textContent='Fehler: '+ev.text;bub.appendChild(t)}
-        scroll();}}
+        scroll()};
+    const pump=async r=>{const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+      while(true){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});
+        let p;while((p=buf.indexOf('\n\n'))>=0){const line=buf.slice(0,p);buf=buf.slice(p+2);if(!line.startsWith('data:'))continue;handle(JSON.parse(line.slice(5)))}}};
+    while(!fin){
+      try{let r;
+        if(mode==='post'){mode='get';r=await fetch('/api/chat',{method:'POST',body:JSON.stringify(body)});confirmed=true}
+        else{r=await fetch('/api/job?id='+jid+'&from='+next);
+          if(r.status===404){if(!confirmed){mode='post';throw new Error('noch nicht gestartet')}throw Object.assign(new Error('Der Auftrag ist auf dem Server nicht mehr vorhanden (Server neu gestartet?).'),{fatal:true})}
+          confirmed=true}
+        if(!r.ok)throw new Error('HTTP '+r.status);
+        fails=0;await pump(r)
+      }catch(e){if(e.fatal||++fails>45)throw e}
+      if(!fin){setLost(true);await nap(document.hidden?1500:800)}}
+    setLost(false);
   }catch(e){const t=document.createElement('div');t.className='tool';t.style.color='#f08a7a';t.textContent='Verbindungsfehler: '+e;bub.appendChild(t)}
   unthk();while(shown<a.text.length){await new Promise(r=>setTimeout(r,30))}
   cur.remove();a.text=clean(a.text);if(a.text){rich(tn,a.text);bub.appendChild(actBtns(a.text,bub));if(localStorage.getItem('autoread')==='1')speak(a.text)}
-  spin.remove();save();
+  spin.remove();curJob=null;try{localStorage.removeItem('job')}catch(e){}save();
   try{if(estTok()>ctxLimit())await autoNext()}catch(e){}
-  busy=false;$('#go').disabled=false;scroll()}
+  busy=false;goBusy(false);scroll()}
 render();
+(function(){try{const j=JSON.parse(localStorage.getItem('job')||'null');if(!j)return;
+  const l=hist[hist.length-1];
+  if(j.cid!==cid||!l||l.role!=='assistant'||l.text||(l.images||[]).length||(l.files||[]).length){localStorage.removeItem('job');return}
+  hist.pop();runAssistant(null,j.jid)}catch(e){}})();
 </script><script>
 (function(){
  var boot=document.getElementById('boot'); if(!boot) return;

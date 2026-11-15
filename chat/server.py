@@ -1666,6 +1666,42 @@ def dev_api(d):
     return {"ok": True, "set": True, "repo": c.get("repo", ""), "branch": c.get("branch", ""), "login": c.get("login", ""), "has_token": bool(c.get("token")),
             "shell": SHELL_OK, "note": ". ".join(note) or "Gespeichert"}
 
+# ---------------- Auftraege: laufen weiter, auch wenn die Verbindung abreisst ----------------
+JOBS = {}; JLOCK = threading.Lock()
+class JobStop(Exception): pass
+def job_new(jid):
+    now = time.time()
+    with JLOCK:
+        for k in [k for k, j in JOBS.items() if j["done"] and now - j["t"] > 1800]: JOBS.pop(k, None)
+        j = JOBS[jid] = {"ev": [], "done": False, "stop": False, "cond": threading.Condition(), "t": now}
+    return j
+def job_emit(j, ev, force=False):
+    if j["stop"] and not force: raise JobStop()
+    if ev.get("type") == "ping": return
+    with j["cond"]: j["ev"].append(ev); j["cond"].notify_all()
+def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
+    emit = lambda ev: job_emit(j, ev)
+    with ALOCK: ACTIVE[0] += 1
+    touch()
+    try:
+        if regen:
+            p = load_prompt(str(regen))
+            if p.startswith("(Prompt nicht"): raise ValueError("Prompt dieses Bildes ist nicht gespeichert")
+            emit({"type": "tool", "name": "generate_image", "prompt": p[:200]})
+            for i in tool_generate({"prompt": p}, opts): emit({"type": "image", "id": i})
+        else:
+            dev = None
+            if req_j.get("dev") and not notools:
+                if not dev_check(req_j.get("devkey")): raise ValueError("Dev-Modus gesperrt: Dev-Passwort fehlt oder ist falsch (opt > Dev-Einstellungen).")
+                dev = dev_load()
+            chat(msgs, emit, fast, not notools, opts, think, dev)
+    except JobStop: job_emit(j, {"type": "stopped"}, True)
+    except Exception as e: job_emit(j, {"type": "error", "text": f"{type(e).__name__}: {e}"}, True)
+    finally:
+        with ALOCK: ACTIVE[0] -= 1
+        touch()
+        with j["cond"]: j["ev"].append({"type": "done"}); j["done"] = True; j["t"] = time.time(); j["cond"].notify_all()
+
 # ---------------- HTTP ----------------
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -1679,6 +1715,13 @@ class H(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             return self._send(200, open(os.path.join(HERE, "index.html"), "rb").read(), "text/html; charset=utf-8")
+        if u.path == "/api/job":
+            q = parse_qs(u.query); jid = (q.get("id") or [""])[0]
+            try: start = max(0, int((q.get("from") or ["0"])[0]))
+            except Exception: start = 0
+            with JLOCK: j = JOBS.get(jid)
+            if j is None: return self._send(404, {"error": "Auftrag nicht gefunden"})
+            return self._stream(jid, j, start)
         if u.path.startswith("/img/"):
             try:
                 data = open(img_path(u.path[5:]), "rb").read()
@@ -1710,6 +1753,23 @@ class H(BaseHTTPRequestHandler):
             st["idle_left"] = idle_left()
             return self._send(200, st)
         self._send(404, {"error": "nicht gefunden"})
+    def _stream(self, jid, j, i):
+        self.send_response(200); self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache"); self.send_header("X-Accel-Buffering", "no"); self.send_header("Connection", "close"); self.end_headers()
+        def w(ev): self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n"); self.wfile.flush()
+        try:
+            w({"type": "job", "id": jid})
+            while True:
+                with j["cond"]:
+                    if i >= len(j["ev"]) and not j["done"]: j["cond"].wait(10)
+                    evs = j["ev"][i:]; done = j["done"]
+                if not evs:
+                    if done: break
+                    w({"type": "ping"}); continue
+                for e in evs: w(dict(e, i=i)); i += 1
+        except Exception: pass
+        self.close_connection = True
+
     def do_POST(self):
         u = urlparse(self.path)
         n = int(self.headers.get("Content-Length", 0)); body = self.rfile.read(n)
@@ -1763,35 +1823,20 @@ class H(BaseHTTPRequestHandler):
                 req_j = json.loads(body); msgs = req_j.get("messages") or []; fast = bool(req_j.get("fast")); notools = bool(req_j.get("summary"))
                 opts = req_j.get("imgopts") if isinstance(req_j.get("imgopts"), dict) else {}; regen = req_j.get("regen"); think = bool(req_j.get("think")) and not notools
             except Exception: return self._send(400, {"error": "ungueltige Anfrage"})
-            self.send_response(200); self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache"); self.send_header("Connection", "close"); self.end_headers()
-            def emit(ev):
-                self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n"); self.wfile.flush()
-            with ALOCK: ACTIVE[0] += 1
-            touch()
-            try:
-                if regen:
-                    p = load_prompt(str(regen))
-                    if p.startswith("(Prompt nicht"): raise ValueError("Prompt dieses Bildes ist nicht gespeichert")
-                    emit({"type": "tool", "name": "generate_image", "prompt": p[:200]})
-                    for i in tool_generate({"prompt": p}, opts): emit({"type": "image", "id": i})
-                else:
-                    dev = None
-                    if req_j.get("dev") and not notools:
-                        if not dev_check(req_j.get("devkey")): raise ValueError("Dev-Modus gesperrt: Dev-Passwort fehlt oder ist falsch (opt > Dev-Einstellungen).")
-                        dev = dev_load()
-                    chat(msgs, emit, fast, not notools, opts, think, dev)
-            except BrokenPipeError: return
-            except Exception as e:
-                try: emit({"type": "error", "text": f"{type(e).__name__}: {e}"})
-                except Exception: return
-            finally:
-                with ALOCK: ACTIVE[0] -= 1
-                touch()
-            try: emit({"type": "done"})
-            except Exception: pass
-            self.close_connection = True
-            return
+            jid = str(req_j.get("job") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_]{6,40}", jid): jid = "j_" + uuid.uuid4().hex[:16]
+            with JLOCK: j = JOBS.get(jid)
+            if j is None:
+                j = job_new(jid)
+                threading.Thread(target=job_run, args=(j, req_j, msgs, fast, notools, opts, regen, think), daemon=True).start()
+            return self._stream(jid, j, 0)
+        if u.path == "/api/job/stop":
+            try: jid = str(json.loads(body or b"{}").get("id") or "")
+            except Exception: jid = ""
+            with JLOCK: j = JOBS.get(jid)
+            if j is None: return self._send(404, {"error": "Auftrag nicht gefunden"})
+            j["stop"] = True
+            return self._send(200, {"ok": True})
         self._send(404, {"error": "nicht gefunden"})
 
 if __name__ == "__main__":
