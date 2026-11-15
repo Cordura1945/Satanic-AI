@@ -66,6 +66,9 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
    <div class="s" style="margin-top:8px">Hugging Face: Konto anlegen, dann unter Settings → Access Tokens ein Token mit Leserechten (Read) erstellen. Es beginnt mit hf_.<br><a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" onclick="return ext(this.href)">Hugging Face öffnen</a></div>
    <div class="s" style="margin-top:8px;opacity:.7">Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im lokalen Speicher dieser App.</div>
   </details>
+  <label>Lizenz-Key<input id="licenseKey" type="password" autocomplete="off" placeholder="satanic-xxxx"></label>
+  <div id="licMsg" style="font-size:11px;margin:4px 0 8px;opacity:.8"></div>
+  <button id="licBtn" style="width:100%;margin-bottom:10px;padding:8px;background:rgba(224,176,61,.15);border:1px solid rgba(224,176,61,.4);color:#e0b03d;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px">Lizenz prüfen</button>
   <label>RunPod API-Key<input id="apiKey" type="password" autocomplete="off"></label>
   <label>Vast.ai API-Key (Ersatz, optional)<input id="vastKey" type="password" autocomplete="off"></label>
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
@@ -82,9 +85,9 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
 <script>
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
-const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404"};
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","vastKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+for(const k of ["apiKey","vastKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
@@ -204,8 +207,31 @@ async function pollRP(){
     draw();return true;
   }catch(e){msg("RunPod-Fehler: "+e.message);return true}
 }
+async function checkLicense(){
+  const key=g("licenseKey").trim();
+  const el=$("licMsg");
+  if(!key){el.textContent="Kein Lizenz-Key eingetragen.";el.style.color="#e05555";return false}
+  // Fingerprint: Browser/Device-Werte → einfache Hash
+  const raw=navigator.userAgent+"|"+navigator.language+"|"+screen.width+"x"+screen.height+"|"+new Date().getTimezoneOffset();
+  let h=0;for(let i=0;i<raw.length;i++){h=((h<<5)-h+raw.charCodeAt(i))|0}
+  const fp=Math.abs(h).toString(16).padStart(8,"0");
+  try{
+    el.textContent="Prüfe Lizenz…";el.style.color="#e0b03d";
+    const r=await fetch("https://satanic-license.yourname.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,fingerprint:fp})});
+    const o=await r.json();
+    if(o.valid){el.textContent="Lizenz gültig.";el.style.color="#4ade80";LS.setItem("licOK","1");LS.setItem("licOKt",String(Date.now()));return true}
+    el.textContent="Lizenz ungültig: "+(o.reason||"unbekannt");el.style.color="#e05555";return false;
+  }catch(e){
+    // Offline-Toleranz: letzte gültige Antwort für 7 Tage
+    const t=parseInt(LS.getItem("licOKt")||"0");
+    if(LS.getItem("licOK")==="1"&&Date.now()-t<7*86400*1000){el.textContent="Offline – letzte gültige Lizenz wird akzeptiert.";el.style.color="#4ade80";return true}
+    el.textContent="Keine Verbindung zum Lizenz-Server.";el.style.color="#e05555";return false;
+  }
+}
+$("licBtn").addEventListener("click",()=>checkLicense());
 async function start(){
   if(S.busy)return;
+  if(!await checkLicense()){msg("Lizenz ungültig – Start blockiert.");$("set").open=true;return}
   if((!g("apiKey")&&!g("vastKey"))||!g("hfToken")){msg("RunPod- oder Vast.ai-Key und Hugging-Face-Token eintragen.");$("set").open=true;return}
   if(!window.SETUP_B64){msg("setup_all.sh fehlt im App-Paket.");return}
   S.busy=true;draw();

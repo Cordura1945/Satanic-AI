@@ -3,6 +3,7 @@ import SafariServices
 import Security
 import AVFoundation
 import WebKit
+import CryptoKit
 
 // MARK: - Speicher fuer Zugangsdaten (Schluesselbund, Ersatz: UserDefaults)
 enum Keychain {
@@ -130,6 +131,9 @@ final class Model: ObservableObject {
     @Published var balance: Double? = nil
     @Published var spend: Double = 0
     @Published var phase: Phase = .none
+    @Published var licenseKey: String { didSet { UserDefaults.standard.set(licenseKey, forKey: "licenseKey") } }
+    @Published var licenseOK = false
+    @Published var licenseMsg = ""
     @Published var step = ""
     @Published var pct: Double = 0
     @Published var shown: Double = 0
@@ -184,6 +188,63 @@ final class Model: ObservableObject {
         disk = u.object(forKey: "disk") as? Int ?? 100
         autoStop = u.object(forKey: "autoStop") as? Int ?? 8
         idleStop = u.object(forKey: "idleStop") as? Int ?? 30
+        licenseKey = u.string(forKey: "licenseKey") ?? ""
+    }
+
+    // MARK: - Lizenz-Check
+    private let licenseURL = URL(string: "https://satanic-license.yourname.workers.dev")!
+    // ↑ Worker-URL hier eintragen (nach Cloudflare-Deploy)
+
+    func checkLicense() async {
+        let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if key.isEmpty {
+            licenseOK = false
+            licenseMsg = "Kein Lizenz-Key eingetragen."
+            return
+        }
+        let fp = Self.fingerprint()
+        let payload: [String: String] = ["key": key, "fingerprint": fp]
+        var req = URLRequest(url: licenseURL)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        req.timeoutInterval = 10
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            let valid = (obj?["valid"] as? Bool) ?? false
+            licenseOK = valid
+            if valid {
+                licenseMsg = "Lizenz gültig."
+            } else {
+                let reason = (obj?["reason"] as? String) ?? "unbekannt"
+                licenseMsg = "Lizenz ungültig: \(reason)"
+            }
+        } catch {
+            // Offline-Toleranz: letzte gültige Antwort für 7 Tage akzeptieren
+            let last = UserDefaults.standard.object(forKey: "licenseLastOK") as? Date
+            if let last = last, Date().timeIntervalSince(last) < 7 * 86400 {
+                licenseOK = true
+                licenseMsg = "Offline – letzte gültige Lizenz wird akzeptiert (7 Tage)."
+            } else {
+                licenseOK = false
+                licenseMsg = "Keine Verbindung zum Lizenz-Server: \(error.localizedDescription)"
+            }
+        }
+        if licenseOK {
+            UserDefaults.standard.set(Date(), forKey: "licenseLastOK")
+        }
+    }
+
+    static func fingerprint() -> String {
+        // Hardware-Fingerprint: eindeutige Werte dieses Geräts → SHA-256
+        let id = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        let model = UIDevice.current.model
+        let name = UIDevice.current.name
+        let sys = ProcessInfo.processInfo.operatingSystemVersionString
+        let raw = "\(id)|\(model)|\(name)|\(sys)"
+        let digest = SHA256.hash(data: Data(raw.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     func startLoop() {
@@ -782,6 +843,13 @@ struct ContentView: View {
                             .foregroundColor(Theme.gray)
                     }.padding(.top, 6)
                 }.tint(Theme.gold)
+                SecureField("Lizenz-Key", text: $m.licenseKey).modifier(Field())
+                if !m.licenseMsg.isEmpty {
+                    Text(m.licenseMsg).font(Theme.mono(11)).foregroundColor(m.licenseOK ? Theme.green : Theme.red)
+                }
+                Button("Lizenz prüfen") {
+                    Task { await m.checkLicense() }
+                }.font(Theme.mono(12)).foregroundColor(Theme.gold)
                 SecureField("RunPod API-Key", text: $m.apiKey).modifier(Field())
                 SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
                 SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
@@ -820,7 +888,18 @@ struct ContentView: View {
                         }
                     }
                 }
-                GoldButton(title: m.busy ? "Starte…" : "Starten") { Task { await m.start() } }.disabled(m.busy)
+                GoldButton(title: m.busy ? "Starte…" : "Starten") {
+                    Task {
+                        if !m.licenseOK {
+                            await m.checkLicense()
+                        }
+                        if m.licenseOK {
+                            await m.start()
+                        } else {
+                            m.licenseMsg = "Lizenz ungültig – Start blockiert. Bitte Lizenz-Key prüfen."
+                        }
+                    }
+                }.disabled(m.busy)
             } else {
                 Card {
                     Text(title).font(Theme.mono(17, bold: true)).foregroundColor(m.phase == .ready ? Theme.green : .white)
