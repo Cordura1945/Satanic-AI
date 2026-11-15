@@ -48,17 +48,25 @@ async function admin(request, env) {
   try { b = await request.json(); } catch (e) { return J({ error: "ungueltige Anfrage" }, 400); }
   const key = cleanKey(b.key);
   if (b.action === "list") {
-    const out = []; let cursor;
+    // Die Liste des Speichers haengt nach Aenderungen kurz nach. Deshalb nennt die Verwaltung
+    // frisch erzeugte Keys selbst (extra); gelesen wird jeder Key einzeln.
+    const names = new Set(); let cursor;
     do {
       const page = await env.LIC.list({ prefix: "key:", cursor });
-      for (const k of page.keys) {
-        const raw = await env.LIC.get(k.name);
-        if (!raw) continue;
-        const e = JSON.parse(raw);
-        out.push({ key: k.name.slice(4), note: e.note || "", created: e.created || "", bound: e.bound || "", last: e.last || "", device: !!e.device, revoked: !!e.revoked });
-      }
+      for (const k of page.keys) names.add(k.name);
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
+    for (const x of (Array.isArray(b.extra) ? b.extra.slice(0, 50) : [])) {
+      const k = cleanKey(x);
+      if (k && k.length <= 64) names.add("key:" + k);
+    }
+    const out = [];
+    for (const name of names) {
+      const raw = await env.LIC.get(name);
+      if (!raw) continue;
+      const e = JSON.parse(raw);
+      out.push({ key: name.slice(4), note: e.note || "", created: e.created || "", bound: e.bound || "", last: e.last || "", device: !!e.device, revoked: !!e.revoked });
+    }
     out.sort((x, y) => (x.created < y.created ? 1 : -1));
     return J({ keys: out });
   }
@@ -94,13 +102,13 @@ button.r{color:#e8625a;border-color:#e8625a}button.g{color:#a2a2ae;border-color:
 <div id="app" style="display:none"><h2>&gt; NEUER KEY</h2><input id="note" placeholder="Notiz, z. B. Kaeufer 12" maxlength="120"><button id="mk">Key erzeugen</button>
 <h2>&gt; KEYS</h2><div id="list"></div></div><div id="msg"></div>
 <script>
-var pw=sessionStorage.getItem('pw')||'';var $=function(i){return document.getElementById(i)};
+var pw=sessionStorage.getItem('pw')||'';var mine=[];try{mine=JSON.parse(sessionStorage.getItem('mine')||'[]')}catch(e){}var $=function(i){return document.getElementById(i)};
 function say(t){$('msg').textContent=t}
 function api(o){return fetch('/api',{method:'POST',headers:{'Content-Type':'application/json','X-Admin':pw},body:JSON.stringify(o)}).then(function(r){return r.json().then(function(j){if(!r.ok)throw new Error(j.error||('Fehler '+r.status));return j})})}
 function d(t){return t?t.slice(0,16).replace('T',' '):'-'}
 function btn(t,c,f){var b=document.createElement('button');b.textContent=t;if(c)b.className=c;b.onclick=f;return b}
 function act(o,t){api(o).then(function(){say(t);load()}).catch(function(e){say(e.message)})}
-function load(){api({action:'list'}).then(function(j){$('login').style.display='none';$('app').style.display='block';var L=$('list');L.textContent='';
+function load(){api({action:'list',extra:mine}).then(function(j){$('login').style.display='none';$('app').style.display='block';var L=$('list');L.textContent='';
 if(!j.keys.length){L.textContent='Noch keine Keys.'}
 j.keys.forEach(function(k){var x=document.createElement('div');x.className='k'+(k.revoked?' off':'');var b=document.createElement('b');b.textContent=k.key;x.appendChild(b);
 var s=document.createElement('small');s.textContent=(k.note||'ohne Notiz')+' | erstellt '+d(k.created)+' | '+(k.revoked?'GESPERRT':k.device?'gebunden seit '+d(k.bound):'noch nicht benutzt')+' | zuletzt geprueft '+d(k.last);x.appendChild(s);
@@ -110,7 +118,7 @@ if(k.device)x.appendChild(btn('Geraet zuruecksetzen','g',function(){act({action:
 x.appendChild(btn('Loeschen','r',function(){if(confirm('Key '+k.key+' endgueltig loeschen?'))act({action:'delete',key:k.key},'Geloescht.')}));
 L.appendChild(x)})}).catch(function(e){sessionStorage.removeItem('pw');$('login').style.display='block';$('app').style.display='none';say(e.message)})}
 $('go').onclick=function(){pw=$('pw').value;sessionStorage.setItem('pw',pw);say('');load()};
-$('mk').onclick=function(){api({action:'create',note:$('note').value}).then(function(j){$('note').value='';say('Neuer Key: '+j.key);load()}).catch(function(e){say(e.message)})};
+$('mk').onclick=function(){api({action:'create',note:$('note').value}).then(function(j){$('note').value='';mine.push(j.key);try{sessionStorage.setItem('mine',JSON.stringify(mine))}catch(e){}say('Neuer Key: '+j.key);load()}).catch(function(e){say(e.message)})};
 if(pw)load();
 </script></body></html>`;
 
