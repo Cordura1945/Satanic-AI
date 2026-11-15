@@ -1,0 +1,6 @@
+setup_all.sh
+setup_all.sh.gz
+_tmp/
+__pycache__/
+*.pyc
+node_modules/
