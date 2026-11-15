@@ -134,6 +134,7 @@ final class Model: ObservableObject {
     @Published var licenseKey: String { didSet { UserDefaults.standard.set(licenseKey, forKey: "licenseKey") } }
     @Published var licenseOK = false
     @Published var licenseMsg = ""
+    var licenseReason = ""
     @Published var step = ""
     @Published var pct: Double = 0
     @Published var shown: Double = 0
@@ -203,7 +204,9 @@ final class Model: ObservableObject {
             licenseMsg = "Lizenzprüfung ist ausgeschaltet."
             return
         }
-        let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let u = UserDefaults.standard
+        let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        licenseReason = ""
         if key.isEmpty {
             licenseOK = false
             licenseMsg = "Kein Lizenz-Key eingetragen."
@@ -223,27 +226,55 @@ final class Model: ObservableObject {
                 answered = true
                 licenseOK = valid
                 if valid {
-                    licenseMsg = "Lizenz gültig."
+                    if (obj["test"] as? Bool) == true {
+                        // Test-Lizenz: keine Offline-Frist, bei jedem Start wird online geprueft
+                        u.set(key, forKey: "licenseTestKey")
+                        u.removeObject(forKey: "licenseLastOK")
+                        var bis = ""
+                        if let ms = obj["until"] as? Double {
+                            let f = DateFormatter()
+                            f.dateFormat = "dd.MM. HH:mm"
+                            bis = " bis " + f.string(from: Date(timeIntervalSince1970: ms / 1000))
+                        }
+                        licenseMsg = "Test-Lizenz gültig" + bis + "."
+                    } else {
+                        u.removeObject(forKey: "licenseTestKey")
+                        u.set(Date(), forKey: "licenseLastOK")
+                        u.set(key, forKey: "licenseLastKey")
+                        licenseMsg = "Lizenz gültig."
+                    }
                 } else {
-                    let reason = (obj["reason"] as? String) ?? "unbekannt"
-                    licenseMsg = "Lizenz ungültig: \(reason)"
+                    licenseReason = (obj["reason"] as? String) ?? "unbekannt"
+                    u.removeObject(forKey: "licenseLastOK")
+                    licenseMsg = licenseReason == "abgelaufen" ? "Test-Lizenz abgelaufen." : "Lizenz ungültig: \(licenseReason)"
                 }
             }
         } catch {
             answered = false
         }
-        if answered {
-            if licenseOK { UserDefaults.standard.set(Date(), forKey: "licenseLastOK") }
-        } else {
-            // Server nicht erreichbar: letzte gueltige Pruefung gilt noch 7 Tage
-            let last = UserDefaults.standard.object(forKey: "licenseLastOK") as? Date
-            if let last = last, Date().timeIntervalSince(last) < 7 * 86400 {
+        if !answered {
+            // Server nicht erreichbar: Test-Lizenzen gelten dann nicht, Voll-Lizenzen noch 7 Tage ab der letzten gueltigen Pruefung
+            let last = u.object(forKey: "licenseLastOK") as? Date
+            if u.string(forKey: "licenseTestKey") == key {
+                licenseOK = false
+                licenseMsg = "Test-Lizenz: keine Verbindung zum Lizenz-Server."
+            } else if let last = last, u.string(forKey: "licenseLastKey") == key, Date().timeIntervalSince(last) < 7 * 86400 {
                 licenseOK = true
                 licenseMsg = "Offline – letzte gültige Lizenz wird akzeptiert (7 Tage)."
             } else {
                 licenseOK = false
                 licenseMsg = "Keine Verbindung zum Lizenz-Server."
             }
+        }
+    }
+
+    // Prueft die Lizenz auch im laufenden Betrieb: ist eine Test-Lizenz abgelaufen, wird der Server beendet
+    func licenseGate() async {
+        guard licenseActive else { licenseOK = true; return }
+        await checkLicense()
+        if !licenseOK && licenseReason == "abgelaufen" && podId != nil {
+            await terminate()
+            message = "Test-Lizenz abgelaufen – der Server wurde beendet."
         }
     }
 
@@ -906,9 +937,7 @@ struct ContentView: View {
                 }
                 GoldButton(title: m.busy ? "Starte…" : "Starten") {
                     Task {
-                        if !m.licenseOK {
-                            await m.checkLicense()
-                        }
+                        await m.checkLicense()
                         if m.licenseOK {
                             await m.start()
                         } else {
@@ -927,7 +956,12 @@ struct ContentView: View {
                     }
                 }
                 if let u = m.chatURL, m.phase == .loading || m.phase == .ready {
-                    GoldButton(title: "Chat öffnen") { web = WebLink(url: u) }
+                    GoldButton(title: "Chat öffnen") {
+                        Task {
+                            await m.licenseGate()
+                            if m.licenseOK { web = WebLink(url: u) } else { m.message = m.licenseMsg }
+                        }
+                    }
                 }
                 GoldButton(title: "Beenden (Terminate)", danger: true) { confirmStop = true }
             }
@@ -1029,12 +1063,19 @@ struct ContentView: View {
         .onAppear {
             if (m.apiKey.isEmpty && m.vastKey.isEmpty) || m.hfToken.isEmpty { showSettings = true }
             m.startLoop()
+            Task { await m.licenseGate() }
             startIntro()
             hideKeyboard()
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { hideKeyboard() }
         }
         .onChange(of: scene) { s in
-            if s == .active { m.startLoop(); hideKeyboard() } else if s == .background { m.stopLoop() }
+            if s == .active { m.startLoop(); hideKeyboard(); Task { await m.licenseGate() } } else if s == .background { m.stopLoop() }
+        }
+        .onChange(of: m.licenseOK) { ok in
+            if !ok { web = nil }
+        }
+        .onReceive(Timer.publish(every: 600, on: .main, in: .common).autoconnect()) { _ in
+            Task { await m.licenseGate() }
         }
     }
 }

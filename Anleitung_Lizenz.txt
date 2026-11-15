@@ -38,6 +38,18 @@ ALLTAG (in der Verwaltung)
 - Weitergabe oder Rueckbuchung: "Sperren".
 - Kaeufer hat neues Geraet oder neu installiert: "Geraet zuruecksetzen".
 
+TEST-LIZENZEN
+-------------
+- Beim Erzeugen "Test, 24 Stunden" (oder 3 Tage) waehlen.
+- Die Laufzeit beginnt beim ersten Start der App, nicht beim Erzeugen.
+  Gemessen wird auf dem Server, die Uhr des Geraets spielt keine Rolle.
+- Nach Ablauf startet die App keinen Server mehr und oeffnet keinen Chat.
+  Laeuft noch ein Server, beendet die App ihn beim naechsten Oeffnen.
+- Test-Lizenzen brauchen bei jeder Pruefung eine Verbindung (keine 7-Tage-Frist).
+- "Geraet zuruecksetzen" verlaengert nicht. "Laufzeit neu starten" gibt dem
+  Tester die volle Zeit noch einmal.
+- Tester brauchen die App ab dem Build, der diese Anleitung enthaelt.
+
 FUER DEN KAEUFER
 ----------------
 Key in den Einstellungen der App eintragen, "Lizenz pruefen" antippen, starten.

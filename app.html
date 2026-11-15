@@ -209,21 +209,32 @@ async function pollRP(){
 }
 const LIC_SERVER="LICENSE_SERVER_PLACEHOLDER",LIC_ON=LIC_SERVER.startsWith("https://");
 function licDevice(){let d=LS.getItem("licDev");if(!d||d.length<16){d=Array.from(crypto.getRandomValues(new Uint8Array(24)),x=>x.toString(16).padStart(2,"0")).join("");LS.setItem("licDev",d)}return d}
-async function checkLicense(){
-  const el=$("licMsg");
+let licOK=!LIC_ON,licWhy="";
+async function lic1(){
+  const el=$("licMsg");licWhy="";
   if(!LIC_ON){el.textContent="Lizenzprüfung ist ausgeschaltet.";el.style.color="#8a8a96";return true}
-  const key=g("licenseKey").trim();
+  const key=g("licenseKey").trim().toUpperCase();
   if(!key){el.textContent="Kein Lizenz-Key eingetragen.";el.style.color="#e05555";return false}
-  el.textContent="Prüfe Lizenz…";el.style.color="#e0b03d";
   let o=null;
   try{const r=await fetch(LIC_SERVER+"/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,device:licDevice()})});if(r.status<500)o=await r.json()}catch(e){}
   if(o&&typeof o.valid==="boolean"){
-    if(o.valid){el.textContent="Lizenz gültig.";el.style.color="#4ade80";LS.setItem("licOKt",String(Date.now()));return true}
-    el.textContent="Lizenz ungültig: "+(o.reason||"unbekannt");el.style.color="#e05555";return false}
-  // Server nicht erreichbar: letzte gueltige Pruefung gilt noch 7 Tage
-  if(Date.now()-parseInt(LS.getItem("licOKt")||"0")<7*86400*1000){el.textContent="Offline – letzte gültige Lizenz wird akzeptiert.";el.style.color="#4ade80";return true}
+    if(o.valid){
+      if(o.test){LS.setItem("licTest",key);LS.removeItem("licOKt");el.textContent="Test-Lizenz gültig bis "+new Date(o.until).toLocaleString("de-DE",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})+"."}
+      else{LS.removeItem("licTest");LS.setItem("licOKt",String(Date.now()));LS.setItem("licOKk",key);el.textContent="Lizenz gültig."}
+      el.style.color="#4ade80";return true}
+    licWhy=o.reason||"unbekannt";LS.removeItem("licOKt");
+    el.textContent=licWhy==="abgelaufen"?"Test-Lizenz abgelaufen.":"Lizenz ungültig: "+licWhy;el.style.color="#e05555";return false}
+  // Server nicht erreichbar: Test-Lizenzen gelten dann nicht, Voll-Lizenzen noch 7 Tage ab der letzten gueltigen Pruefung
+  if(LS.getItem("licTest")===key){el.textContent="Test-Lizenz: keine Verbindung zum Lizenz-Server.";el.style.color="#e05555";return false}
+  if(LS.getItem("licOKk")===key&&Date.now()-parseInt(LS.getItem("licOKt")||"0")<7*86400*1000){el.textContent="Offline – letzte gültige Lizenz wird akzeptiert.";el.style.color="#4ade80";return true}
   el.textContent="Keine Verbindung zum Lizenz-Server.";el.style.color="#e05555";return false;
 }
+async function checkLicense(){licOK=await lic1();return licOK}
+// Prueft die Lizenz auch im laufenden Betrieb: ohne gueltige Lizenz kein Chat; ist eine Test-Lizenz abgelaufen, wird der Server beendet
+async function licGate(){
+  if(!LIC_ON)return true;
+  if(!await checkLicense()){closeChat();if(licWhy==="abgelaufen"&&S.podId){await stopPod(true);msg("Test-Lizenz abgelaufen – der Server wurde beendet.")}}
+  draw();return licOK}
 $("licBtn").addEventListener("click",()=>checkLicense());
 async function start(){
   if(S.busy)return;
@@ -263,8 +274,8 @@ async function start(){
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
 }
-async function stopPod(){
-  if(!S.podId||!confirm("Pod wirklich beenden? Alles im Pod geht verloren (ein Network Volume bleibt erhalten)."))return;
+async function stopPod(force){
+  if(!S.podId||(force!==true&&!confirm("Pod wirklich beenden? Alles im Pod geht verloren (ein Network Volume bleibt erhalten).")))return;
   try{if(S.prov==="vast"){const {code}=await vast("DELETE",`/instances/${S.podId}/`);if(code<200||code>=300){msg("Vast.ai: Beenden fehlgeschlagen (HTTP "+code+"). Bitte in der Vast.ai-Konsole löschen.");return}}else await gql(`mutation{podTerminate(input:{podId:${q(S.podId)}})}`);msg("Pod beendet.");S.podId=null;S.phase="none"}catch(e){msg("Fehler beim Beenden: "+e.message)}
   poll();
 }
@@ -291,15 +302,16 @@ function draw(){
   $("ttl").textContent=TT[S.phase];$("ttl").className=S.phase==="ready"?"grn":"";$("info").textContent=S.info;
   $("pbar").style.width=S.shown+"%";$("pt").textContent=Math.floor(S.shown)+" %";$("eta").textContent=S.eta;
   $("step").textContent=S.step;$("log").textContent=S.log.join("\n");
-  $("openChat").style.display=(S.chatURL&&(S.phase==="loading"||S.phase==="ready"))?"":"none";
+  $("openChat").style.display=(licOK&&S.chatURL&&(S.phase==="loading"||S.phase==="ready"))?"":"none";
 }
-function openChat(){$("cf").src=S.chatURL;$("chat").style.display="block"}
+async function openChat(){if(!await licGate()){msg($("licMsg").textContent);return}$("cf").src=S.chatURL;$("chat").style.display="block"}
 function closeChat(){$("chat").style.display="none";$("cf").src="about:blank"}
 /* ---- Loop ---- */
 let pt=null;
 function loop(){clearTimeout(pt);(async function f(){if(document.hidden)return;await poll();pt=setTimeout(f,S.podId?6000:20000)})()}
 setInterval(tick,1000);
-document.addEventListener("visibilitychange",()=>{if(!document.hidden)loop()});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden){loop();licGate()}});
+licGate();setInterval(()=>{if(!document.hidden)licGate()},600000);
 /* ---- Intro ---- */
 let done=false;const sp=$("sp"),ui=$("ui");
 function finish(){if(done)return;done=true;ui.classList.add("fast");ui.classList.add("on");sp.style.opacity=0;setTimeout(()=>{try{sp.pause()}catch(e){}sp.style.display="none"},1000)}
