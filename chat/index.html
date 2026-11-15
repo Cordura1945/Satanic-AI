@@ -362,12 +362,20 @@ async function runAssistant(regenId,resumeJid){
   try{
     const body={messages:payload().slice(0,-1),fast:$('#mdl').value==='fast',imgopts:imgopts(),think:$('#othk').checked,job:jid};if($('#odev').checked&&devKey){body.dev=true;body.devkey=devKey}if(regenId)body.regen=regenId;
     let next=0,fin=false,lost=null,mode=resumeJid?'get':'post',confirmed=!!resumeJid,fails=0;
-    const setLost=v=>{if(v&&!lost){lost=document.createElement('div');lost.className='tool';lost.textContent='⏳ Verbindung unterbrochen – verbinde neu, Satanic arbeitet weiter …';bub.appendChild(lost);scroll()}else if(!v&&lost){lost.remove();lost=null}};
+    let lostT=null,bk=null,srvNow=0,reconn=false;
+    const setLost=v=>{if(v){if(!lost&&!lostT)lostT=setTimeout(()=>{lostT=null;lost=document.createElement('div');lost.className='tool';lost.textContent='⏳ Keine Verbindung zum Server – versuche es weiter. Der Auftrag läuft dort weiter.';bub.appendChild(lost);scroll()},4000)}
+      else{clearTimeout(lostT);lostT=null;if(lost){lost.remove();lost=null}}};
+    const hm=t=>new Date(t*1000).toLocaleTimeString('de-DE',{hour:'2-digit',minute:'2-digit'});
+    const flushBk=()=>{if(!bk)return;const b=bk;bk=null;clearTimeout(b.tm);if(!b.n||srvNow-b.t0<5)return;
+      const t=document.createElement('div');t.className='tool';t.style.color='#3fb950';
+      t.textContent='✓ Im Hintergrund weitergearbeitet ('+hm(b.t0)+(hm(b.t1)!==hm(b.t0)?'–'+hm(b.t1):'')+' Uhr)'+(b.tools?': '+b.tools+(b.tools>1?' Schritte':' Schritt'):'');bub.appendChild(t);scroll()};
     const handle=ev=>{
-        if(ev.type==='job'||ev.type==='ping')return;
+        if(ev.type==='ping')return;
+        if(ev.type==='job'){setLost(false);if(reconn){flushBk();srvNow=ev.now||0;bk={n:0,tools:0,t0:null,t1:null,tm:setTimeout(flushBk,2500)}}return}
         if(ev.i!=null){if(ev.i<next)return;next=ev.i+1}
         setLost(false);
-        if(ev.type==='done'){fin=true}
+        if(bk){if(ev.t!=null&&ev.t<srvNow-1){if(ev.type!=='done'){bk.n++;if(ev.type==='tool')bk.tools++;if(bk.t0==null)bk.t0=ev.t;bk.t1=ev.t}}else flushBk()}
+        if(ev.type==='done'){flushBk();fin=true}
         else if(ev.type==='stopped'){const t=document.createElement('div');t.className='tool';t.textContent='⏹ Gestoppt';bub.appendChild(t)}
         else if(ev.type==='think'){if(!thk){thk=document.createElement('div');thk.className='tool';thk.textContent='💭 Denkt nach …';bub.insertBefore(thk,tn)}}
         else if(ev.type==='delta'){unthk();a.text+=ev.text;kick()}
@@ -384,7 +392,7 @@ async function runAssistant(regenId,resumeJid){
     while(!fin){
       try{let r;
         if(mode==='post'){mode='get';r=await fetch('/api/chat',{method:'POST',body:JSON.stringify(body)});confirmed=true}
-        else{r=await fetch('/api/job?id='+jid+'&from='+next);
+        else{reconn=true;r=await fetch('/api/job?id='+jid+'&from='+next);
           if(r.status===404){if(!confirmed){mode='post';throw new Error('noch nicht gestartet')}throw Object.assign(new Error('Der Auftrag ist auf dem Server nicht mehr vorhanden (Server neu gestartet?).'),{fatal:true})}
           confirmed=true}
         if(!r.ok)throw new Error('HTTP '+r.status);

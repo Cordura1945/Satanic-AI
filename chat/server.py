@@ -1678,7 +1678,7 @@ def job_new(jid):
 def job_emit(j, ev, force=False):
     if j["stop"] and not force: raise JobStop()
     if ev.get("type") == "ping": return
-    with j["cond"]: j["ev"].append(ev); j["cond"].notify_all()
+    with j["cond"]: j["ev"].append(dict(ev, t=round(time.time(), 1))); j["cond"].notify_all()
 def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
     emit = lambda ev: job_emit(j, ev)
     with ALOCK: ACTIVE[0] += 1
@@ -1700,7 +1700,7 @@ def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
     finally:
         with ALOCK: ACTIVE[0] -= 1
         touch()
-        with j["cond"]: j["ev"].append({"type": "done"}); j["done"] = True; j["t"] = time.time(); j["cond"].notify_all()
+        with j["cond"]: j["ev"].append({"type": "done", "t": round(time.time(), 1)}); j["done"] = True; j["t"] = time.time(); j["cond"].notify_all()
 
 # ---------------- HTTP ----------------
 class H(BaseHTTPRequestHandler):
@@ -1758,7 +1758,7 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache"); self.send_header("X-Accel-Buffering", "no"); self.send_header("Connection", "close"); self.end_headers()
         def w(ev): self.wfile.write(b"data: " + json.dumps(ev).encode() + b"\n\n"); self.wfile.flush()
         try:
-            w({"type": "job", "id": jid})
+            w({"type": "job", "id": jid, "now": round(time.time(), 1)})
             while True:
                 with j["cond"]:
                     if i >= len(j["ev"]) and not j["done"]: j["cond"].wait(10)
