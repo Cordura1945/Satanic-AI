@@ -1,0 +1,9 @@
+# Satanic AI Lizenz-Server. Wird ueber GitHub Actions (lizenz-server.yml) zu Cloudflare uebertragen.
+name = "satanic-license"
+main = "worker.js"
+compatibility_date = "2025-06-01"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "LIC"
+id = "c8cce7d941d0448e814116446000f406"

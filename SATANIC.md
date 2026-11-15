@@ -10,6 +10,7 @@
 - KIStart.swift: Starter-App fuer iPhone (SwiftUI). project.yml gehoert dazu.
 - app.html: Starter-App fuer Android und Windows (eine Datei). main.js, package.json, capacitor.config.json sind die Huelle.
 - .github/workflows/build.yml: baut ipa, apk und exe und legt sie im Release latest-<branch> ab.
+- license/: Lizenz-Server (worker.js), seine Einstellungen und config.json mit der Server-Adresse. Test: "node tools/license_test.mjs".
 - web/: alter Stand, wird nicht gebaut. Nicht aendern.
 
 ## Regeln
@@ -25,6 +26,8 @@
 - App-Icon: icon.png im Hauptordner, 1024x1024 PNG. Nur diese Datei ersetzen, der Build verteilt sie auf ipa, apk und exe.
 - Vor git_push mit "git status --short" pruefen, dass nur gewollte Dateien geaendert sind, oder bei git_push files angeben.
 - Zugangs-Token nie in Befehle, Dateien oder Notizen schreiben.
+- Lizenz: Der Text LICENSE_SERVER_PLACEHOLDER in KIStart.swift und app.html muss stehen bleiben. Die Server-Adresse gehoert nur in license/config.json; der Build setzt sie ein. Leer heisst: Pruefung aus.
+- Der Build legt die Dateien direkt ins Release (latest-<branch>), nicht mehr in den Build-Speicher von GitHub.
 - Bild oder Dokument aus dem Chat: mit use_upload ins Projekt legen, nicht auf dem Server danach suchen.
 - git_push prueft vor dem Push die Syntax und fuehrt hier zusaetzlich "tools/build_setup.py --check" samt Probelauf aus. Schlaegt das fehl, wird nichts gepusht.
 - Aenderungen an chat/server.py sind heikel: ein Fehler legt den Chat lahm. Kleine Schritte, nach jedem Schritt pruefen.

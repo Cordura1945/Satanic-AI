@@ -192,59 +192,68 @@ final class Model: ObservableObject {
     }
 
     // MARK: - Lizenz-Check
-    private let licenseURL = URL(string: "https://satanic-license.yourname.workers.dev")!
-    // ↑ Worker-URL hier eintragen (nach Cloudflare-Deploy)
+    // Adresse des Lizenz-Servers. Der Build setzt sie aus license/config.json ein.
+    // Solange dort keine https-Adresse steht, ist die Pruefung ausgeschaltet.
+    static let licenseServer = "LICENSE_SERVER_PLACEHOLDER"
+    var licenseActive: Bool { Self.licenseServer.hasPrefix("https://") }
 
     func checkLicense() async {
+        guard licenseActive, let url = URL(string: Self.licenseServer + "/verify") else {
+            licenseOK = true
+            licenseMsg = "Lizenzprüfung ist ausgeschaltet."
+            return
+        }
         let key = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if key.isEmpty {
             licenseOK = false
             licenseMsg = "Kein Lizenz-Key eingetragen."
             return
         }
-        let fp = Self.fingerprint()
-        let payload: [String: String] = ["key": key, "fingerprint": fp]
-        var req = URLRequest(url: licenseURL)
+        let payload: [String: String] = ["key": key, "device": Self.deviceID()]
+        var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try? JSONSerialization.data(withJSONObject: payload)
         req.timeoutInterval = 10
+        var answered = false
         do {
             let (data, resp) = try await URLSession.shared.data(for: req)
-            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-            let valid = (obj?["valid"] as? Bool) ?? false
-            licenseOK = valid
-            if valid {
-                licenseMsg = "Lizenz gültig."
-            } else {
-                let reason = (obj?["reason"] as? String) ?? "unbekannt"
-                licenseMsg = "Lizenz ungültig: \(reason)"
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if code < 500, let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let valid = obj["valid"] as? Bool {
+                answered = true
+                licenseOK = valid
+                if valid {
+                    licenseMsg = "Lizenz gültig."
+                } else {
+                    let reason = (obj["reason"] as? String) ?? "unbekannt"
+                    licenseMsg = "Lizenz ungültig: \(reason)"
+                }
             }
         } catch {
-            // Offline-Toleranz: letzte gültige Antwort für 7 Tage akzeptieren
+            answered = false
+        }
+        if answered {
+            if licenseOK { UserDefaults.standard.set(Date(), forKey: "licenseLastOK") }
+        } else {
+            // Server nicht erreichbar: letzte gueltige Pruefung gilt noch 7 Tage
             let last = UserDefaults.standard.object(forKey: "licenseLastOK") as? Date
             if let last = last, Date().timeIntervalSince(last) < 7 * 86400 {
                 licenseOK = true
                 licenseMsg = "Offline – letzte gültige Lizenz wird akzeptiert (7 Tage)."
             } else {
                 licenseOK = false
-                licenseMsg = "Keine Verbindung zum Lizenz-Server: \(error.localizedDescription)"
+                licenseMsg = "Keine Verbindung zum Lizenz-Server."
             }
-        }
-        if licenseOK {
-            UserDefaults.standard.set(Date(), forKey: "licenseLastOK")
         }
     }
 
-    static func fingerprint() -> String {
-        // Hardware-Fingerprint: eindeutige Werte dieses Geräts → SHA-256
-        let id = UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
-        let model = UIDevice.current.model
-        let name = UIDevice.current.name
-        let sys = ProcessInfo.processInfo.operatingSystemVersionString
-        let raw = "\(id)|\(model)|\(name)|\(sys)"
-        let digest = SHA256.hash(data: Data(raw.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+    static func deviceID() -> String {
+        // Zufaellige Kennung dieser Installation: uebersteht Updates, aendert sich bei Neuinstallation
+        let u = UserDefaults.standard
+        if let d = u.string(forKey: "licenseDevice"), d.count >= 16 { return d }
+        let d = UUID().uuidString + UUID().uuidString
+        u.set(d, forKey: "licenseDevice")
+        return d
     }
 
     func startLoop() {

@@ -17,6 +17,7 @@ OUT = os.path.join(ROOT, "setup_all.sh")
 # Die Starter-App schickt das Skript gzip+Base64-kodiert in der Anfrage an RunPod mit.
 # Bis 97.200 Zeichen lief das nachweislich, bei 99.560 kam HTTP 500. Deshalb darunter bleiben.
 LIMIT = 96000
+LIC_MARK = "LICENSE_SERVER_PLACEHOLDER"
 
 BOOT = r'''#!/bin/bash
 # Satanic-AI Setup, selbstentpackend. Quelltext: setup_template.sh und chat/ im Repo.
@@ -106,6 +107,8 @@ def check(data, real):
             r = subprocess.run([bash, p], capture_output=True, cwd=d, env=dict(os.environ, SETUP_NUR_ENTPACKEN="1"))
             got = open(os.path.join(d, "setup_run.sh"), "rb").read() if os.path.exists(os.path.join(d, "setup_run.sh")) else b""
             say(r.returncode == 0 and got == real, "setup_all.sh entpackt sich selbst korrekt" + ("" if got == real else "\n" + (r.stdout + r.stderr).decode("utf-8", "replace")[-400:]))
+    marks = [n for n in ("KIStart.swift", "app.html") if os.path.isfile(os.path.join(ROOT, n)) and LIC_MARK not in read(os.path.join(ROOT, n)).decode("utf-8", "replace")]
+    say(not marks, "Lizenz-Platzhalter in den Apps vorhanden" + ("" if not marks else " (fehlt in: " + ", ".join(marks) + "; die Adresse gehoert nur in license/config.json)"))
     smoke = os.path.join(ROOT, "tools", "smoke_test.py")
     if os.name != "nt" and os.path.isfile(smoke):
         try:
@@ -119,6 +122,30 @@ def check(data, real):
     return ok
 
 
+def license_server():
+    """Adresse des Lizenz-Servers aus license/config.json, oder '' wenn die Pruefung aus ist."""
+    try:
+        import json
+        srv = str(json.load(open(os.path.join(ROOT, "license", "config.json"), encoding="utf-8")).get("server") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+    return srv if re.fullmatch(r"https://[A-Za-z0-9.-]+(/[A-Za-z0-9._/-]*)?", srv) else ""
+
+
+def apply_license():
+    """Nur im Build (CI): setzt die Server-Adresse in die Apps ein. Lokal bleiben die Dateien unveraendert."""
+    srv = license_server()
+    if not os.environ.get("CI"):
+        return
+    for name in ("KIStart.swift", "app.html"):
+        p = os.path.join(ROOT, name)
+        s = read(p).decode("utf-8")
+        if srv and LIC_MARK in s:
+            with open(p, "wb") as f:
+                f.write(s.replace(LIC_MARK, srv).encode("utf-8"))
+    print("Lizenzpruefung: " + ("AN, Server " + srv if srv else "aus (keine Adresse in license/config.json)"))
+
+
 if __name__ == "__main__":
     data, real, used = build()
     if "--check" in sys.argv:
@@ -128,4 +155,5 @@ if __name__ == "__main__":
         raise SystemExit(f"FEHLER: Setup-Skript ist mit {size} Zeichen zu gross fuer den Pod-Start (hoechstens {LIMIT}). Dateien in chat/ verkleinern.")
     with open(OUT, "wb") as f:
         f.write(data)
+    apply_license()
     print(f"setup_all.sh erzeugt ({len(data)} Bytes, {size} Zeichen fuer den Pod-Start) aus setup_template.sh + " + ", ".join(used))

@@ -1,77 +1,44 @@
-Satanic AI – Lizenz-System
+Satanic AI - Lizenz-System
 ==========================
+
+WOZU
+----
+Jeder Kaeufer bekommt einen eigenen Key. Der Key wird beim ersten Start an
+sein Geraet gebunden. Auf einem anderen Geraet oder nach einer Sperre startet
+die App keinen Server mehr. Die Pruefung bremst Weitergabe, sie ist kein
+unknackbarer Schutz.
 
 AUFBAU
 ------
-- license/worker.js  → Cloudflare Worker (Lizenz-Server)
-- license/keys.json  → deine Key-Liste (einfach editierbar)
-- KIStart.swift      → iOS: Lizenz-Check vor Pod-Start
-- app.html           → Android/Windows: Lizenz-Check vor Pod-Start
+- license/worker.js     Lizenz-Server (Cloudflare Worker)
+- license/wrangler.toml Einstellungen fuer die Uebertragung zu Cloudflare
+- license/config.json   Adresse des Servers. Leer = Pruefung in den Apps aus.
+- KIStart.swift, app.html  Pruefung vor dem Start, Eingabefeld fuer den Key
+Keys, Geraetebindung und Sperren liegen im Cloudflare-Speicher (KV), nicht im Repo.
 
-DEPLOY (einmalig)
+EINMAL EINRICHTEN
 -----------------
-1. Cloudflare-Konto anlegen (kostenlos): https://dash.cloudflare.com
-2. Workers & Pages → Create Worker → Name: satanic-license
-3. Code aus license/worker.js einfügen
-4. Deploy klicken
-5. Du bekommst eine URL wie: https://satanic-license.<dein-name>.workers.dev
-6. Diese URL in KIStart.swift (Zeile: let url = URL(string: "...")!)
-   und in app.html (Zeile: fetch("https://satanic-license...")) eintragen
+1) Cloudflare: Mein Profil -> API-Token -> Token erstellen -> Vorlage
+   "Edit Cloudflare Workers" -> erstellen und den Token kopieren.
+2) GitHub: Repo -> Settings -> Secrets and variables -> Actions ->
+   "New repository secret", zwei Stueck:
+   CLOUDFLARE_API_TOKEN  = der Token aus Schritt 1
+   LICENSE_ADMIN_PW      = dein Admin-Passwort (mindestens 12 Zeichen)
+   Beides nie in einen Chat schreiben.
+3) GitHub: Actions -> "Lizenz-Server" -> "Run workflow".
+   Am Ende steht die Adresse des Servers in der Zusammenfassung.
+4) Verwaltung oeffnen: <Adresse>/admin, mit dem Admin-Passwort anmelden,
+   einen Key fuer dich selbst erzeugen.
+5) Die Adresse in license/config.json bei "server" eintragen und pushen.
+   Erst ab dem naechsten Build pruefen die Apps die Lizenz.
 
-KEYS ERZEUGEN
--------------
-Jeder Käufer bekommt einen einzigartigen Key. Format: satanic-XXXX
+ALLTAG (in der Verwaltung)
+--------------------------
+- Key erzeugen: Notiz eingeben, "Key erzeugen", Key dem Kaeufer geben.
+- Weitergabe oder Rueckbuchung: "Sperren".
+- Kaeufer hat neues Geraet oder neu installiert: "Geraet zuruecksetzen".
 
-1. Öffne license/keys.json
-2. Füge einen neuen Eintrag hinzu:
-
-   "satanic-a1b2": {
-     "email": "käufer@mail.com",
-     "fingerprint": "",
-     "created_at": "2026-02-15T10:00:00Z",
-     "revoked": false
-   }
-
-3. fingerprint: leer lassen → wird beim ersten Start automatisch gesetzt
-   (der Worker speichert den Fingerprint des ersten Geräts)
-4. keys.json auf Cloudflare hochladen (Workers → Settings → KV Storage
-   oder einfach als Binding einbinden)
-
-WICHTIG: Der Worker prüft:
-- Key existiert?
-- revoked = false?
-- fingerprint passt? (leer = wird beim ersten Start gesetzt)
-
-WIDERRUF (bei Weiterverkauf)
-----------------------------
-1. Öffne license/keys.json
-2. Setze "revoked": true bei dem betroffenen Key
-3. Hochladen → ab sofort sperrt sich die App beim nächsten Check
-
-OFFLINE-TOLERANZ
+FUER DEN KAEUFER
 ----------------
-- App akzeptiert letzte gültige Antwort für 7 Tage
-- Danach: erneute Prüfung nötig
-- Bei dauerhaftem Offline-Betrieb: App sperrt sich nach 7 Tagen
-
-FINGERPRINT
------------
-- iOS: identifierForVendor + Model + Name + OS-Version → SHA-256
-- Android/Windows: UserAgent + Sprache + Screen-Size + Timezone → Hash
-- Wird beim ersten Start an den Worker gesendet und gespeichert
-- Gerätetausch: neuer Fingerprint → neuer Key nötig (oder du setzt
-  den Fingerprint im JSON auf den neuen Wert)
-
-PROBLEME BEHEBEN
-----------------
-- "key_not_found" → Key falsch eingetragen oder nicht in keys.json
-- "fingerprint_mismatch" → Gerät gewechselt → Fingerprint im JSON
-  auf den neuen Wert setzen oder neuer Key
-- "revoked" → Key wurde widerrufen → bei dir melden
-- "Keine Verbindung" → Internet prüfen, Worker-URL korrekt?
-
-KOSTEN
-------
-- Cloudflare Workers: kostenlos (100k Requests/Tag)
-- KV Storage: kostenlos (1 GB)
-- Reicht für tausende Käufer
+Key in den Einstellungen der App eintragen, "Lizenz pruefen" antippen, starten.
+Ohne Internet gilt die letzte gueltige Pruefung noch 7 Tage.

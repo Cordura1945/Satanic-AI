@@ -11,9 +11,27 @@ jobs:
     - uses: actions/checkout@v4
     - name: Chat-Server und Setup-Skript pruefen
       run: python3 tools/build_setup.py --check
-  iphone:
+  vorbereiten:
     needs: pruefen
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+    - name: Release fuer diesen Build neu anlegen
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: |
+        TAG="latest-${GITHUB_REF_NAME//\//-}"
+        gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
+        gh release create "$TAG" --target "$GITHUB_SHA" \
+          --title "$APP_NAME ($GITHUB_REF_NAME) - Build #$GITHUB_RUN_NUMBER" \
+          --notes "Automatisch gebaut aus $GITHUB_SHA (Branch $GITHUB_REF_NAME, Run $GITHUB_RUN_ID)."
+  iphone:
+    needs: vorbereiten
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
     - name: Icon und Logo einbinden
@@ -60,13 +78,17 @@ jobs:
         mkdir out
         cp "$APP_NAME.ipa" out/
         cp Anleitung*.txt out/ || true
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-ipa
-        path: out/
+    - name: Ins Release hochladen
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: gh release upload "latest-${GITHUB_REF_NAME//\//-}" "out/$APP_NAME.ipa" --clobber
   android:
-    needs: pruefen
+    needs: vorbereiten
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
@@ -111,13 +133,17 @@ jobs:
         mkdir out
         cp android/app/build/outputs/apk/debug/app-debug.apk "out/$APP_NAME.apk"
         cp Anleitung*.txt out/ || true
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-apk
-        path: out/
+    - name: Ins Release hochladen
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: gh release upload "latest-${GITHUB_REF_NAME//\//-}" "out/$APP_NAME.apk" --clobber
   windows:
-    needs: pruefen
+    needs: vorbereiten
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-node@v4
@@ -145,30 +171,9 @@ jobs:
         mkdir out
         cp dist/KI-Start.exe "out/$APP_NAME.exe"
         cp Anleitung*.txt out/ || true
-    - uses: actions/upload-artifact@v4
-      with:
-        name: ${{ env.APP_NAME }}-exe
-        path: out/
-  release:
-    needs: [iphone, android, windows]
-    if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-    - uses: actions/download-artifact@v4
-      with:
-        path: dl
-    - name: Release mit ipa, apk und exe aktualisieren
+    - name: Ins Release hochladen
+      shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-      run: |
-        TAG="latest-${GITHUB_REF_NAME//\//-}"
-        mapfile -t FILES < <(find dl -type f \( -name '*.ipa' -o -name '*.apk' -o -name '*.exe' \) | sort)
-        if [ ${#FILES[@]} -eq 0 ]; then echo "Keine Build-Dateien gefunden"; exit 1; fi
-        printf '%s\n' "${FILES[@]}"
-        gh release delete "$TAG" --cleanup-tag --yes 2>/dev/null || true
-        gh release create "$TAG" "${FILES[@]}" --target "$GITHUB_SHA" \
-          --title "$APP_NAME ($GITHUB_REF_NAME) - Build #$GITHUB_RUN_NUMBER" \
-          --notes "Automatisch gebaut aus $GITHUB_SHA (Branch $GITHUB_REF_NAME, Run $GITHUB_RUN_ID)."
+      run: gh release upload "latest-${GITHUB_REF_NAME//\//-}" "out/$APP_NAME.exe" --clobber

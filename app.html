@@ -207,26 +207,22 @@ async function pollRP(){
     draw();return true;
   }catch(e){msg("RunPod-Fehler: "+e.message);return true}
 }
+const LIC_SERVER="LICENSE_SERVER_PLACEHOLDER",LIC_ON=LIC_SERVER.startsWith("https://");
+function licDevice(){let d=LS.getItem("licDev");if(!d||d.length<16){d=Array.from(crypto.getRandomValues(new Uint8Array(24)),x=>x.toString(16).padStart(2,"0")).join("");LS.setItem("licDev",d)}return d}
 async function checkLicense(){
-  const key=g("licenseKey").trim();
   const el=$("licMsg");
+  if(!LIC_ON){el.textContent="Lizenzprüfung ist ausgeschaltet.";el.style.color="#8a8a96";return true}
+  const key=g("licenseKey").trim();
   if(!key){el.textContent="Kein Lizenz-Key eingetragen.";el.style.color="#e05555";return false}
-  // Fingerprint: Browser/Device-Werte → einfache Hash
-  const raw=navigator.userAgent+"|"+navigator.language+"|"+screen.width+"x"+screen.height+"|"+new Date().getTimezoneOffset();
-  let h=0;for(let i=0;i<raw.length;i++){h=((h<<5)-h+raw.charCodeAt(i))|0}
-  const fp=Math.abs(h).toString(16).padStart(8,"0");
-  try{
-    el.textContent="Prüfe Lizenz…";el.style.color="#e0b03d";
-    const r=await fetch("https://satanic-license.yourname.workers.dev",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,fingerprint:fp})});
-    const o=await r.json();
-    if(o.valid){el.textContent="Lizenz gültig.";el.style.color="#4ade80";LS.setItem("licOK","1");LS.setItem("licOKt",String(Date.now()));return true}
-    el.textContent="Lizenz ungültig: "+(o.reason||"unbekannt");el.style.color="#e05555";return false;
-  }catch(e){
-    // Offline-Toleranz: letzte gültige Antwort für 7 Tage
-    const t=parseInt(LS.getItem("licOKt")||"0");
-    if(LS.getItem("licOK")==="1"&&Date.now()-t<7*86400*1000){el.textContent="Offline – letzte gültige Lizenz wird akzeptiert.";el.style.color="#4ade80";return true}
-    el.textContent="Keine Verbindung zum Lizenz-Server.";el.style.color="#e05555";return false;
-  }
+  el.textContent="Prüfe Lizenz…";el.style.color="#e0b03d";
+  let o=null;
+  try{const r=await fetch(LIC_SERVER+"/verify",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,device:licDevice()})});if(r.status<500)o=await r.json()}catch(e){}
+  if(o&&typeof o.valid==="boolean"){
+    if(o.valid){el.textContent="Lizenz gültig.";el.style.color="#4ade80";LS.setItem("licOKt",String(Date.now()));return true}
+    el.textContent="Lizenz ungültig: "+(o.reason||"unbekannt");el.style.color="#e05555";return false}
+  // Server nicht erreichbar: letzte gueltige Pruefung gilt noch 7 Tage
+  if(Date.now()-parseInt(LS.getItem("licOKt")||"0")<7*86400*1000){el.textContent="Offline – letzte gültige Lizenz wird akzeptiert.";el.style.color="#4ade80";return true}
+  el.textContent="Keine Verbindung zum Lizenz-Server.";el.style.color="#e05555";return false;
 }
 $("licBtn").addEventListener("click",()=>checkLicense());
 async function start(){
