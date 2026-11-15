@@ -57,6 +57,8 @@ Agree antippen, App neu starten.
 ----------------------------------------------
 Nur noetig, wenn die KI im Dev-Modus selbst Projekte in dein
 GitHub-Repo pushen soll.
+
+Weg A: nur bestimmte Repos (weniger Zugriff)
 1) Token-Seite oeffnen:
    https://github.com/settings/personal-access-tokens/new
 2) Namen eingeben, Ablaufdatum waehlen.
@@ -64,16 +66,26 @@ GitHub-Repo pushen soll.
    Repos auswaehlen, an denen die KI arbeiten darf.
 4) "Permissions" -> "Repository permissions":
    Contents: Read and write
+   Workflows: Read and write (sonst kann die KI die Build-Datei
+   nicht aendern)
    Actions: Read-only (damit die KI das Build-Ergebnis lesen kann)
 5) "Generate token" antippen und den Token SOFORT kopieren.
    Er beginnt mit github_pat_.
-6) Im Chat: opt -> Dev-Einstellungen. Dev-Passwort festlegen
+
+Weg B: alle Repos, auch neue anlegen (mehr Zugriff)
+1) Token-Seite oeffnen: https://github.com/settings/tokens/new
+2) Haekchen bei "repo" und "workflow" setzen.
+3) "Generate token" antippen und den Token SOFORT kopieren.
+   Er beginnt mit ghp_.
+Ein Fehler der KI kann dann jedes deiner Repos treffen.
+
+Token eintragen (beide Wege)
+1) Im Chat: opt -> Dev-Einstellungen. Dev-Passwort festlegen
    (mindestens 8 Zeichen), Token, Repo (besitzer/name) und
    Branch eintragen, Speichern.
-7) Auf jedem neuen Server einmal das Dev-Passwort eingeben.
-Soll die KI auch neue Repos anlegen duerfen, braucht der Token
-zusaetzlich "All repositories" und "Administration: Read and
-write". Das ist deutlich mehr Zugriff, nur bei Bedarf vergeben.
+2) Auf jedem neuen Server einmal das Dev-Passwort eingeben.
+Den Token NIE in den Chat schreiben. Die KI braucht ihn dort
+nicht, sie nutzt den hinterlegten Token von selbst.
 
 WICHTIG
 -------

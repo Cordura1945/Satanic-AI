@@ -1145,7 +1145,7 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
             except Exception: args = {}
             if c["name"] in DEV_FN:
                 lab, key = DEV_LABEL[c["name"]]
-                emit({"type": "tool", "name": c["name"], "prompt": "", "label": (lab + ": " + str(args.get(key) or "")[:160]).rstrip(": ")})
+                emit({"type": "tool", "name": c["name"], "prompt": "", "label": redact(lab + ": " + str(args.get(key) or ""))[:170].rstrip(": ")})
                 sig = c["name"] + json.dumps(args, sort_keys=True); n = seen[sig] = seen.get(sig, 0) + 1
                 if dev is None: res = "FEHLER: Der Dev-Modus ist ausgeschaltet. Der Nutzer muss ihn unter opt einschalten."
                 elif n >= 3 and c["name"] in DEV_RO:
@@ -1195,7 +1195,7 @@ ASKPASS = os.path.join(HERE, "askpass.sh")
 GITIGN = os.path.join(HERE, "dev_gitignore")
 MAX_ITER_DEV = 60
 NOTES = os.path.join(STORE, "dev_notes.md")
-DEV_RO = {"list_files", "read_file", "search", "run", "build_status"}
+DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build"}
 DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push"}
 DEVLOCK = threading.Lock()
 SKIP = {".git", "node_modules", "__pycache__", ".gradle", "Pods", ".venv", "DerivedData"}
@@ -1224,6 +1224,10 @@ def dev_check(key):
     if hmac.compare_digest(_pwhash(key, c.get("salt", "")), c["hash"]): return True
     with DEVLOCK: time.sleep(1.5)
     return False
+
+TOKRX = re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+TOKMSG = "Zugangs-Token gehoeren nicht in Befehle oder Dateien. Fuer GitHub gibt es git_clone, git_push, build_status und get_build; die nutzen den hinterlegten Token von selbst."
+def redact(t): return TOKRX.sub("***", t or "")
 
 def clip(t, cap=6000):
     t = t or ""
@@ -1285,8 +1289,8 @@ def git(args, cwd, token=None, timeout=300):
 
 class _NoRedir(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *a, **k): return None
-def gh(method, path, token, data=None, raw=False, timeout=30):
-    h = {"Accept": "application/vnd.github+json", "User-Agent": "satanic-dev", "X-GitHub-Api-Version": "2022-11-28"}
+def gh(method, path, token, data=None, raw=False, timeout=30, accept=None):
+    h = {"Accept": accept or "application/vnd.github+json", "User-Agent": "satanic-dev", "X-GitHub-Api-Version": "2022-11-28"}
     if token: h["Authorization"] = "Bearer " + token
     rq = urllib.request.Request(GH_API + path, json.dumps(data).encode() if data is not None else None, h, method=method)
     try:
@@ -1367,6 +1371,7 @@ def t_read(a, cfg):
 def t_write(a, cfg):
     c = a.get("content")
     if not isinstance(c, str): raise ValueError("content fehlt")
+    if TOKRX.search(c): raise ValueError(TOKMSG)
     fp = ppath(a.get("path")); root = os.path.realpath(PROJECTS)
     if fp == root or os.path.isdir(fp): raise ValueError("path muss eine Datei sein, z.B. projekt/datei.py")
     if (os.sep + ".git" + os.sep) in fp + os.sep: raise ValueError("Dateien in .git duerfen nicht geschrieben werden")
@@ -1384,6 +1389,7 @@ def t_edit(a, cfg):
     if os.path.isdir(fp): raise ValueError("path ist ein Ordner")
     if (os.sep + ".git" + os.sep) in fp + os.sep: raise ValueError("Dateien in .git duerfen nicht geaendert werden")
     if not isinstance(old, str) or not old or not isinstance(new, str): raise ValueError("old und new werden gebraucht")
+    if TOKRX.search(new): raise ValueError(TOKMSG)
     with open(fp, encoding="utf-8") as f: s = f.read()
     n = s.count(old)
     if n == 0: raise ValueError("old kommt in der Datei nicht vor. Text exakt aus read_file uebernehmen (ohne Zeilennummern, mit gleicher Einrueckung).")
@@ -1419,6 +1425,7 @@ def t_search(a, cfg):
 def t_run(a, cfg):
     cmd = str(a.get("command") or "").strip()
     if not cmd: raise ValueError("command fehlt")
+    if TOKRX.search(cmd): raise ValueError(TOKMSG)
     cwd = ppath(a.get("cwd"), True)
     if not os.path.isdir(cwd): raise ValueError("cwd muss ein Ordner sein")
     try: t = max(5, min(int(a.get("timeout") or 120), 600))
@@ -1468,8 +1475,16 @@ def t_push(a, cfg):
             if repo.split("/")[0].lower() != (cfg.get("login") or "").lower(): raise ValueError(f"Repo {repo} gibt es nicht")
             gh("POST", "/user/repos", tok, {"name": repo.split("/")[1], "private": True}); created = True
         git(["remote", "add", "origin", GIT_BASE + repo + ".git"], d)
-    git(["add", "-A"], d)
-    code, st = git(["status", "--porcelain"], d); nfiles = len([l for l in st.split("\n") if l.strip()])
+    files = a.get("files")
+    if isinstance(files, list) and files:
+        paths = [os.path.relpath(ppath(os.path.join(name, str(f))), d) for f in files]
+        if any(x.startswith("..") for x in paths): raise ValueError("files muessen im Projekt liegen")
+        code, out = git(["add", "-A", "--"] + paths, d)
+        if code: raise ValueError("git add: " + clip(out, 500))
+    else:
+        code, _x = git(["diff", "--cached", "--quiet"], d)
+        if code == 0: git(["add", "-A"], d)
+    code, st = git(["diff", "--cached", "--name-only"], d); changed = [l.strip() for l in st.split("\n") if l.strip()]; nfiles = len(changed)
     if nfiles:
         code, out = git(["commit", "-q", "-m", msg[:2000]], d)
         if code: raise ValueError("commit: " + clip(out, 800))
@@ -1479,8 +1494,10 @@ def t_push(a, cfg):
     if code: raise ValueError("push abgelehnt: " + clip(out, 1200))
     code, sha = git(["rev-parse", "--short", "HEAD"], d)
     if not nfiles and "up-to-date" in out.lower().replace(" ", "-"): return f"Nichts zu tun: keine Aenderungen, {repo} (Branch {br}) ist schon auf Stand {sha}."
-    return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}, {nfiles} Datei(en) geaendert. "
-            "Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen.")
+    code, rest = git(["status", "--porcelain"], d); left = [l[3:] for l in rest.split("\n") if l.strip()]
+    return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}. Dateien im Commit: " + (", ".join(changed[:15]) + (" ..." if nfiles > 15 else "") if changed else "keine neuen") + ". "
+            + ("NICHT mit gepusht (noch ungesichert): " + ", ".join(left[:10]) + ". " if left else "")
+            + "Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen, fertige Dateien mit get_build holen.")
 
 def t_build(a, cfg):
     d = _proj(a); tok = cfg.get("token"); repo = _origin(d)
@@ -1516,11 +1533,49 @@ def t_build(a, cfg):
         except Exception: pass
     return "\n".join(out)
 
+def _store_file(name, data):
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(name))[:80].strip(".") or "datei.bin"
+    fid = uuid.uuid4().hex[:6]
+    with open(os.path.join(FILES, fid + "__" + name), "wb") as f: f.write(data)
+    return fid, name
+def t_getbuild(a, cfg):
+    d = _proj(a); tok = cfg.get("token"); repo = _origin(d)
+    if not repo: raise ValueError("Projekt hat kein GitHub-Repo (erst git_push)")
+    if not tok: raise ValueError("kein GitHub-Token gespeichert")
+    want = str(a.get("which") or "alle").lower().strip(". ")
+    exts = (".ipa", ".apk", ".exe") if want in ("alle", "all", "") else tuple(e for e in (".ipa", ".apk", ".exe") if e == "." + want)
+    if not exts: raise ValueError("which muss ipa, apk, exe oder alle sein")
+    code, sha = git(["rev-parse", "HEAD"], d); code, br = git(["rev-parse", "--abbrev-ref", "HEAD"], d)
+    got = []; src = ""
+    try: rels = gh("GET", f"/repos/{repo}/releases?per_page=10", tok)
+    except ValueError: rels = []
+    rel = next((r for r in rels if isinstance(r, dict) and r.get("tag_name") == "latest-" + br.replace("/", "-") and r.get("target_commitish") == sha), None)
+    if rel:
+        for asset in rel.get("assets") or []:
+            if str(asset.get("name", "")).lower().endswith(exts):
+                data = gh("GET", f"/repos/{repo}/releases/assets/{asset['id']}", tok, raw=True, timeout=180, accept="application/octet-stream")
+                got.append(_store_file(asset["name"], data) + (len(data),))
+        src = "Release " + rel["tag_name"]
+    if not got:
+        runs = gh("GET", f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=5", tok).get("workflow_runs") or []
+        run = next((r for r in runs if r.get("status") == "completed" and r.get("conclusion") == "success"), None)
+        if not run: raise ValueError(f"Kein erfolgreich beendeter Build fuer den letzten Commit {sha[:7]}. Erst mit build_status das Ende abwarten.")
+        for art in gh("GET", f"/repos/{repo}/actions/runs/{run['id']}/artifacts?per_page=50", tok).get("artifacts") or []:
+            if art.get("expired") or art.get("size_in_bytes", 0) > 500000000: continue
+            z = zipfile.ZipFile(io.BytesIO(gh("GET", f"/repos/{repo}/actions/artifacts/{art['id']}/zip", tok, raw=True, timeout=240)))
+            for n in z.namelist():
+                if n.lower().endswith(exts):
+                    data = z.read(n); got.append(_store_file(n, data) + (len(data),))
+        src = f"Build-Lauf {run['id']}"
+    if not got: raise ValueError("Im Build wurden keine passenden Dateien gefunden (" + ", ".join(exts) + ")")
+    return (f"Aus {src} (Commit {sha[:7]}) geholt. Der Nutzer sieht sie jetzt im Chat als Download: " + ", ".join(f"{n} ({sz / 1e6:.1f} MB)" for _i, n, sz in got)
+            + ". Damit ist die Uebergabe erledigt. Die Dateien nicht entpacken oder weiter untersuchen: ein erfolgreicher Build ist der Nachweis.", [(i, n) for i, n, _s in got])
+
 def notes_read():
     try: return open(NOTES, encoding="utf-8").read().strip()
     except Exception: return ""
 def note_add(text):
-    t = (notes_read() + "\n- " + " ".join(str(text).split())[:1500]).strip()
+    t = (notes_read() + "\n- " + redact(" ".join(str(text).split()))[:1500]).strip()
     if len(t) > 4000: t = "- (aeltere Notizen entfernt)\n" + t[-3600:][t[-3600:].find("\n- ") + 1:]
     with open(NOTES, "w", encoding="utf-8") as f: f.write(t)
 def t_note(a, cfg):
@@ -1540,10 +1595,10 @@ def guide(name):
     return ""
 
 DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "write_file": t_write, "edit_file": t_edit, "search": t_search,
-          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build}
+          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild}
 DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
              "search": ("Suche", "pattern"), "run": ("Fuehre aus", "command"), "git_clone": ("Hole Repo", "repo"), "git_push": ("Commit + Push", "message"),
-             "build_status": ("Pruefe Build", "project")}
+             "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project")}
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": req}}}
 _S = lambda d: {"type": "string", "description": d}
@@ -1563,10 +1618,13 @@ DEV_TOOLS = [
      {"command": _S("Shell-Befehl"), "cwd": _S("Arbeitsordner relativ zum Projektordner"), "timeout": {"type": "integer", "description": "Sekunden, Standard 120, hoechstens 600"}}, ["command"]),
  _fn("git_clone", "Holt ein GitHub-Repo in den Projektordner oder aktualisiert es, wenn es schon da ist. Ohne Angaben wird das in den Einstellungen hinterlegte Repo genommen.",
      {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard")}, []),
- _fn("git_push", "Committet alle Aenderungen eines Projekts und pusht sie zu GitHub (aktueller Branch). Hat das Projekt noch kein Repo, wird ein privates angelegt.",
-     {"project": _S("Projektordner, z.B. Satanic-AI"), "message": _S("kurze Commit-Nachricht"), "repo": _S("nur fuer neue Projekte: besitzer/name")}, ["project", "message"]),
+ _fn("git_push", "Committet Aenderungen eines Projekts und pusht sie zu GitHub (aktueller Branch). Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt.",
+     {"project": _S("Projektordner, z.B. Satanic-AI"), "message": _S("kurze Commit-Nachricht"), "files": {"type": "array", "items": {"type": "string"}, "description": "nur diese Dateien pushen (Pfade relativ zum Projekt)"},
+      "repo": _S("nur fuer neue Projekte: besitzer/name")}, ["project", "message"]),
  _fn("build_status", "Wartet auf den GitHub-Actions-Lauf zum letzten Commit des Projekts und liefert Ergebnis, Jobs und bei Fehlern das Log-Ende.",
      {"project": _S("Projektordner"), "wait": {"type": "boolean", "description": "auf das Ende warten (Standard true)"}}, ["project"]),
+ _fn("get_build", "Holt die fertig gebauten Dateien (ipa, apk, exe) zum letzten Commit von GitHub und gibt sie dem Nutzer im Chat als Download. Erst nach erfolgreichem build_status aufrufen.",
+     {"project": _S("Projektordner"), "which": _S("ipa, apk, exe oder alle (Standard alle)")}, ["project"]),
 ]
 
 def dev_prompt(cfg):
@@ -1574,7 +1632,10 @@ def dev_prompt(cfg):
     except Exception: projs = []
     return (
      " DEV-MODUS IST AKTIV: Du arbeitest zusaetzlich als Programmier-Agent mit eigenem Projektordner auf dem Server. Alle Pfade sind relativ dazu, z.B. 'Satanic-AI/app.html'. "
-     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status. "
+     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build. "
+     "Will der Nutzer die fertige ipa, apk oder exe haben: nach erfolgreichem build_status get_build aufrufen, dann erscheinen die Dateien bei ihm als Download. Lade Build-Dateien nie selbst mit curl oder gh herunter und pruefe ihren Inhalt nicht. "
+     "Schreibe NIE einen Zugangs-Token (ghp_..., github_pat_...) in einen Befehl, eine Datei oder eine Notiz, auch wenn er im Chat steht; die GitHub-Werkzeuge nutzen den hinterlegten Token von selbst. "
+     "Pruefe vor git_push mit 'git status --short', dass nur gewollte Dateien geaendert sind, oder gib bei git_push files an. "
      f"Du hast pro Runde hoechstens {MAX_ITER_DEV} Werkzeug-Schritte, geh sparsam damit um. "
      "ARBEITSWEISE: 0) Bei groesseren Auftraegen zuerst einen kurzen Plan mit note festhalten, dann Punkt fuer Punkt umsetzen. Beginne nach wenigen Lese-Schritten mit den Aenderungen, statt immer weiter zu suchen. "
      "Halte mit note fest, was du gefunden hast (Datei, Zeile, Funktionsname), denn aeltere Werkzeug-Ausgaben werden gekuerzt. Wiederhole keinen Befehl, den du schon ausgefuehrt hast. "
@@ -1601,7 +1662,12 @@ def dev_call(name, args, cfg, emit):
             try: emit({"type": "ping"})
             except Exception: return
     threading.Thread(target=beat, daemon=True).start()
-    try: return clip(str(DEV_FN[name](args, cfg)), 12000)
+    try:
+        r = DEV_FN[name](args, cfg)
+        if isinstance(r, tuple):
+            for fid, fname in r[1]: emit({"type": "file", "id": fid, "name": fname})
+            r = r[0]
+        return redact(clip(str(r), 12000))
     finally: stop.set()
 
 def compact(msgs, budget=60000):
