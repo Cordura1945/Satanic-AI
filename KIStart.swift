@@ -608,16 +608,23 @@ struct ChatWebView: UIViewRepresentable {
         }
 
         func webView(_ w: WKWebView, decidePolicyFor a: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-            decisionHandler(a.shouldPerformDownload ? .download : .allow)
+            // Downloads im Browser oeffnen: dort gibt es die Abfrage "Laden" und eine Fortschrittsanzeige.
+            if a.shouldPerformDownload, let u = a.request.url {
+                decisionHandler(.cancel)
+                DispatchQueue.main.async { UIApplication.shared.open(u) }
+                return
+            }
+            decisionHandler(.allow)
         }
 
         func webView(_ w: WKWebView, decidePolicyFor r: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-            if let h = r.response as? HTTPURLResponse,
-               (h.value(forHTTPHeaderField: "Content-Disposition") ?? "").lowercased().contains("attachment") {
-                decisionHandler(.download)
-            } else {
-                decisionHandler(r.canShowMIMEType ? .allow : .download)
+            let att = ((r.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? "").lowercased().contains("attachment")
+            if att || !r.canShowMIMEType, let u = r.response.url {
+                decisionHandler(.cancel)
+                DispatchQueue.main.async { UIApplication.shared.open(u) }
+                return
             }
+            decisionHandler(.allow)
         }
 
         func webView(_ w: WKWebView, navigationAction: WKNavigationAction, didBecome d: WKDownload) { d.delegate = self }

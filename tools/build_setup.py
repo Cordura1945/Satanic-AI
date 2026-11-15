@@ -106,6 +106,14 @@ def check(data, real):
             r = subprocess.run([bash, p], capture_output=True, cwd=d, env=dict(os.environ, SETUP_NUR_ENTPACKEN="1"))
             got = open(os.path.join(d, "setup_run.sh"), "rb").read() if os.path.exists(os.path.join(d, "setup_run.sh")) else b""
             say(r.returncode == 0 and got == real, "setup_all.sh entpackt sich selbst korrekt" + ("" if got == real else "\n" + (r.stdout + r.stderr).decode("utf-8", "replace")[-400:]))
+    smoke = os.path.join(ROOT, "tools", "smoke_test.py")
+    if os.name != "nt" and os.path.isfile(smoke):
+        try:
+            r = subprocess.run([sys.executable, smoke], capture_output=True, text=True, timeout=240)
+            rest = "\n".join(l for l in (r.stdout + r.stderr).split("\n") if l.strip() and not l.startswith("OK "))[-900:]
+            say(r.returncode == 0, "Probelauf des Chat-Servers" + ("" if r.returncode == 0 else "\n" + rest))
+        except subprocess.TimeoutExpired:
+            say(False, "Probelauf des Chat-Servers (Zeitlimit ueberschritten)")
     size = len(base64.b64encode(gzip.compress(data, 9, mtime=0)))
     say(size <= LIMIT, f"Groesse fuer den Pod-Start: {size} von hoechstens {LIMIT} Zeichen")
     return ok

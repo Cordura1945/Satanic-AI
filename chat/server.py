@@ -1191,12 +1191,17 @@ PROJECTS = os.environ.get("PROJECTS", "/workspace/projects"); os.makedirs(PROJEC
 DEVCFG = os.path.join(STORE, "dev.json")
 GIT_BASE = os.environ.get("GIT_BASE", "https://github.com/")
 GH_API = os.environ.get("GH_API", "https://api.github.com")
-ASKPASS = os.path.join(HERE, "askpass.sh")
-GITIGN = os.path.join(HERE, "dev_gitignore")
+SAFE = HERE
+if os.geteuid() == 0:
+    try: os.makedirs("/opt/satanic", exist_ok=True); os.chmod("/opt/satanic", 0o755); SAFE = "/opt/satanic"
+    except Exception: pass
+ASKPASS = os.path.join(SAFE, "askpass.sh")
+GITIGN = os.path.join(SAFE, "dev_gitignore")
+SEALED = [None]
 MAX_ITER_DEV = 60
 NOTES = os.path.join(STORE, "dev_notes.md")
-DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build"}
-DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push"}
+DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build", "send_file"}
+DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push", "use_upload", "build_rerun"}
 DEVLOCK = threading.Lock()
 SKIP = {".git", "node_modules", "__pycache__", ".gradle", "Pods", ".venv", "DerivedData"}
 try: os.chmod(STORE, 0o700)
@@ -1217,13 +1222,44 @@ def dev_save(c):
     fd = os.open(DEVCFG + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f: json.dump(c, f)
     os.replace(DEVCFG + ".tmp", DEVCFG)
-def _pwhash(pw, salt): return hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200000).hex()
-def dev_check(key):
+def _derive(pw, salt):
+    d = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200000, 64)
+    return d[:32].hex(), d[32:]
+def _pwhash(pw, salt): return _derive(pw, salt)[0]
+def _crypt(key, nonce, data):
+    ks = b""; i = 0
+    while len(ks) < len(data): ks += hmac.new(key, b"enc" + nonce + i.to_bytes(4, "big"), "sha256").digest(); i += 1
+    return bytes(x ^ y for x, y in zip(data, ks))
+def tok_seal(key, tok):
+    n = os.urandom(16); ct = _crypt(key, n, tok.encode())
+    return (n + ct + hmac.new(key, b"mac" + n + ct, "sha256").digest()).hex()
+def tok_open(key, blob):
+    try:
+        b = bytes.fromhex(blob); n, ct, tag = b[:16], b[16:-32], b[-32:]
+        if not hmac.compare_digest(tag, hmac.new(key, b"mac" + n + ct, "sha256").digest()): return ""
+        return _crypt(key, n, ct).decode()
+    except Exception: return ""
+def dev_unlock(key):
+    """Prueft das Dev-Passwort. Liefert die Einstellungen mit entschluesseltem Token (nur im Speicher) oder None."""
     c = dev_load()
-    if not c.get("hash") or not isinstance(key, str) or not key: return False
-    if hmac.compare_digest(_pwhash(key, c.get("salt", "")), c["hash"]): return True
-    with DEVLOCK: time.sleep(1.5)
-    return False
+    if not c.get("hash") or not isinstance(key, str) or not key: return None
+    h, k = _derive(key, c.get("salt", ""))
+    if not hmac.compare_digest(h, c["hash"]):
+        with DEVLOCK: time.sleep(1.5)
+        return None
+    if c.get("token"):
+        c["tok"] = tok_seal(k, c.pop("token")); dev_save(c)
+    c = dict(c); c["token"] = tok_open(k, c["tok"]) if c.get("tok") else ""; c["_k"] = k
+    return c
+def dev_check(key): return dev_unlock(key) is not None
+def seal_probe():
+    if not SANDBOX: return
+    try:
+        pp = os.path.join(STORE, ".probe")
+        with os.fdopen(os.open(pp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f: f.write("x")
+        code, _o = sh(["cat", pp], "/", 15)
+        SEALED[0] = code != 0
+    except Exception: pass
 
 TOKRX = re.compile(r"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
 TOKMSG = "Zugangs-Token gehoeren nicht in Befehle oder Dateien. Fuer GitHub gibt es git_clone, git_push, build_status und get_build; die nutzen den hinterlegten Token von selbst."
@@ -1276,9 +1312,11 @@ def sh(cmd, cwd, timeout=120, extra=None):
 def git(args, cwd, token=None, timeout=300):
     extra = {}
     if token:
-        if not os.path.exists(ASKPASS):
-            open(ASKPASS, "w").write('#!/bin/sh\ncase "$1" in\n*"\'https://github.com\'"*|*"@github.com\'"*) ;;\n*) exit 1 ;;\nesac\ncase "$1" in\n*sername*) echo x-access-token ;;\n*) echo "$GIT_PW" ;;\nesac\n')
-            os.chmod(ASKPASS, 0o755)
+        if SANDBOX:
+            try: subprocess.run(["pkill", "-KILL", "-u", str(_AG.pw_uid)], capture_output=True, timeout=10)
+            except Exception: pass
+        open(ASKPASS, "w").write('#!/bin/sh\ncase "$1" in\n*"\'https://github.com\'"*|*"@github.com\'"*) ;;\n*) exit 1 ;;\nesac\ncase "$1" in\n*sername*) echo x-access-token ;;\n*) echo "$GIT_PW" ;;\nesac\n')
+        os.chmod(ASKPASS, 0o755)
         extra = {"GIT_ASKPASS": ASKPASS, "GIT_PW": token}
     if not os.path.exists(GITIGN) or "_tmp/" not in open(GITIGN).read():
         open(GITIGN, "w").write("__pycache__/\n*.pyc\nnode_modules/\n.DS_Store\n.venv/\n_tmp/\n"); os.chmod(GITIGN, 0o644)
@@ -1368,20 +1406,36 @@ def t_read(a, cfg):
     more = f" Weiter mit start={end + 1}." if end < len(lines) else ""
     return "\n".join(part) + f"\n[Zeilen {s}-{end} von {len(lines)}.{more} Zeilennummer und Tab gehoeren nicht zum Inhalt.]"
 
-def t_write(a, cfg):
-    c = a.get("content")
-    if not isinstance(c, str): raise ValueError("content fehlt")
-    if TOKRX.search(c): raise ValueError(TOKMSG)
-    fp = ppath(a.get("path")); root = os.path.realpath(PROJECTS)
-    if fp == root or os.path.isdir(fp): raise ValueError("path muss eine Datei sein, z.B. projekt/datei.py")
+def _wbytes(fp, data):
+    if fp == os.path.realpath(PROJECTS) or os.path.isdir(fp): raise ValueError("path muss eine Datei sein, z.B. projekt/datei.py")
     if (os.sep + ".git" + os.sep) in fp + os.sep: raise ValueError("Dateien in .git duerfen nicht geschrieben werden")
     d = os.path.dirname(fp); made = []; x = d
     while not os.path.isdir(x): made.append(x); x = os.path.dirname(x)
     os.makedirs(d, exist_ok=True)
     for m in made: _own(m)
-    new = not os.path.exists(fp)
-    with open(fp, "w", encoding="utf-8") as f: f.write(c)
+    with open(fp, "wb") as f: f.write(data)
     _own(fp)
+def t_upload(a, cfg):
+    i = str(a.get("id") or "").strip(); p = str(a.get("path") or "").strip()
+    if not p: raise ValueError("path fehlt (Ziel im Projekt, z.B. MeinProjekt/icon.png)")
+    if re.fullmatch(r"(img|gen)_[0-9a-f]{6}", i):
+        try: data = open(img_path(i), "rb").read()
+        except OSError: raise ValueError(f"Bild {i} nicht gefunden")
+        ext = ".png" if data[:4] == b"\x89PNG" else ".jpg" if data[:2] == b"\xff\xd8" else ".webp" if data[8:12] == b"WEBP" else ".bin"
+    elif re.fullmatch(r"doc_[0-9a-f]{6}", i):
+        data = doc_text(i).encode("utf-8"); ext = ".txt"
+        if not data: raise ValueError(f"Dokument {i} nicht gefunden")
+    else: raise ValueError("id muss img_..., gen_... oder doc_... sein (die Kennung des Anhangs aus dem Chat)")
+    if p.endswith("/") or os.path.isdir(ppath(p)): p = p.rstrip("/") + "/" + i + ext
+    elif "." not in os.path.basename(p): p += ext
+    fp = ppath(p); _wbytes(fp, data)
+    return f"{i} liegt jetzt im Projekt als {prel(fp)} ({len(data)} Bytes, Format {ext[1:]})." + ("" if ext == ".txt" else " Groesse oder Format bei Bedarf mit run und Pillow umrechnen.")
+def t_write(a, cfg):
+    c = a.get("content")
+    if not isinstance(c, str): raise ValueError("content fehlt")
+    if TOKRX.search(c): raise ValueError(TOKMSG)
+    fp = ppath(a.get("path")); new = not os.path.exists(fp)
+    _wbytes(fp, c.encode("utf-8"))
     return f"{'angelegt' if new else 'ueberschrieben'}: {prel(fp)} ({c.count(chr(10)) + 1} Zeilen)"
 
 def t_edit(a, cfg):
@@ -1402,6 +1456,8 @@ def t_search(a, cfg):
     if not pat: raise ValueError("pattern fehlt")
     try: rx = re.compile(pat, re.I)
     except re.error: rx = re.compile(re.escape(pat), re.I)
+    try: ctx = max(0, min(int(a.get("context") or 0), 3))
+    except Exception: ctx = 0
     files = []
     if os.path.isfile(base): files = [base]
     else:
@@ -1416,10 +1472,12 @@ def t_search(a, cfg):
             data = open(fp, "rb").read()
         except OSError: continue
         if b"\0" in data[:2000]: continue
-        for i, l in enumerate(data.decode("utf-8", "replace").split("\n"), 1):
+        ls = data.decode("utf-8", "replace").split("\n")
+        for i, l in enumerate(ls, 1):
             if rx.search(l):
-                out.append(f"{prel(fp)}:{i}: {l.strip()[:220]}")
-                if len(out) >= 60: return "\n".join(out) + "\n... (mehr Treffer, Muster oder path eingrenzen)"
+                if ctx: out.append(f"{prel(fp)}:\n" + "\n".join(f"{'>' if k == i else ' '}{k}\t{ls[k - 1][:220]}" for k in range(max(1, i - ctx), min(len(ls), i + ctx) + 1)))
+                else: out.append(f"{prel(fp)}:{i}: {l.strip()[:220]}")
+                if len(out) >= (20 if ctx else 60): return "\n".join(out) + "\n... (mehr Treffer, Muster oder path eingrenzen)"
     return "\n".join(out) or "keine Treffer"
 
 def t_run(a, cfg):
@@ -1458,6 +1516,40 @@ def t_clone(a, cfg):
     code, cur = git(["rev-parse", "--abbrev-ref", "HEAD"], dst)
     return f"geklont nach {name} (Branch {cur}). Dateien:\n" + clip(t_list({"path": name}, cfg), 2500) + guide(name)
 
+PRECHK = """import sys, json, subprocess, shutil, os
+bad = []
+for f in sys.argv[1:]:
+    if not os.path.isfile(f): continue
+    try:
+        if f.endswith('.py'): compile(open(f, encoding='utf-8').read(), f, 'exec')
+        elif f.endswith('.json') and os.path.getsize(f) < 5000000: json.load(open(f, encoding='utf-8'))
+        elif f.endswith('.sh') or (f.endswith(('.js', '.mjs')) and shutil.which('node')):
+            r = subprocess.run(['bash', '-n', f] if f.endswith('.sh') else ['node', '--check', f], capture_output=True, text=True)
+            if r.returncode: bad.append(f + ': ' + r.stderr.strip()[-300:])
+    except Exception as e: bad.append(f + ': ' + type(e).__name__ + ': ' + str(e)[:300])
+print(chr(10).join(bad)); sys.exit(1 if bad else 0)
+"""
+def prepush(d, changed):
+    msgs = []
+    code, out = sh(["python3", "-c", PRECHK] + changed[:300], d, 120)
+    if code: msgs.append(out.strip())
+    if os.path.isfile(os.path.join(d, "tools", "build_setup.py")):
+        code, out = sh(["python3", "tools/build_setup.py", "--check"], d, 300)
+        if code: msgs.append("\n".join(l for l in out.split("\n") if not l.startswith("OK ")).strip()[-1500:])
+    return "\n".join(m for m in msgs if m)
+def t_rerun(a, cfg):
+    d = _proj(a); tok = cfg.get("token"); repo = _origin(d)
+    if not repo or not tok: raise ValueError("Projekt hat kein GitHub-Repo oder es ist kein Token gespeichert")
+    code, sha = git(["rev-parse", "HEAD"], d)
+    runs = gh("GET", f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=5", tok).get("workflow_runs") or []
+    if not runs: raise ValueError(f"Kein Build-Lauf zum letzten Commit {sha[:7]} gefunden")
+    r = runs[0]
+    if r.get("status") != "completed": return f"Lauf {r['id']} laeuft noch. Mit build_status das Ende abwarten."
+    gh("POST", f"/repos/{repo}/actions/runs/{r['id']}/" + ("rerun-failed-jobs" if r.get("conclusion") == "failure" else "rerun"), tok)
+    for _i in range(10):
+        time.sleep(3)
+        if (gh("GET", f"/repos/{repo}/actions/runs/{r['id']}", tok).get("status") or "") != "completed": break
+    return f"Lauf {r['id']} neu gestartet. Mit build_status das Ergebnis abwarten."
 def t_push(a, cfg):
     d = _proj(a); name = os.path.basename(d); msg = str(a.get("message") or "").strip(); tok = cfg.get("token")
     if not msg: raise ValueError("message fehlt (kurze Commit-Nachricht)")
@@ -1486,6 +1578,14 @@ def t_push(a, cfg):
         if code == 0: git(["add", "-A"], d)
     code, st = git(["diff", "--cached", "--name-only"], d); changed = [l.strip() for l in st.split("\n") if l.strip()]; nfiles = len(changed)
     if nfiles:
+        git(["add", "-A", "--"] + changed, d)
+        code, st = git(["diff", "--cached", "--name-only"], d); changed = [l.strip() for l in st.split("\n") if l.strip()]; nfiles = len(changed)
+    if nfiles and not a.get("skip_check"):
+        err = prepush(d, changed)
+        if err:
+            git(["reset", "-q"], d)
+            raise ValueError("Pruefung vor dem Push fehlgeschlagen, es wurde NICHTS gepusht und nichts ist mehr vorgemerkt:\n" + err + "\nFehler beheben und git_push erneut aufrufen.")
+    if nfiles:
         code, out = git(["commit", "-q", "-m", msg[:2000]], d)
         if code: raise ValueError("commit: " + clip(out, 800))
     code, br = git(["rev-parse", "--abbrev-ref", "HEAD"], d)
@@ -1494,7 +1594,7 @@ def t_push(a, cfg):
     if code: raise ValueError("push abgelehnt: " + clip(out, 1200))
     code, sha = git(["rev-parse", "--short", "HEAD"], d)
     if not nfiles and "up-to-date" in out.lower().replace(" ", "-"): return f"Nichts zu tun: keine Aenderungen, {repo} (Branch {br}) ist schon auf Stand {sha}."
-    code, rest = git(["status", "--porcelain"], d); left = [l[3:] for l in rest.split("\n") if l.strip()]
+    code, rest = git(["status", "--porcelain"], d); left = [l.strip().split(None, 1)[-1] for l in rest.split("\n") if l.strip()]
     return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}. Dateien im Commit: " + (", ".join(changed[:15]) + (" ..." if nfiles > 15 else "") if changed else "keine neuen") + ". "
             + ("NICHT mit gepusht (noch ungesichert): " + ", ".join(left[:10]) + ". " if left else "")
             + "Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen, fertige Dateien mit get_build holen.")
@@ -1533,8 +1633,18 @@ def t_build(a, cfg):
         except Exception: pass
     return "\n".join(out)
 
+def _fname(name): return re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(str(name)))[:80].strip(".") or "datei.bin"
+def t_sendfile(a, cfg):
+    fp = ppath(a.get("path"), True)
+    if os.path.isdir(fp): raise ValueError("path ist ein Ordner. Erst mit run ein ZIP daraus machen und dann das ZIP uebergeben.")
+    sz = os.path.getsize(fp)
+    if sz == 0: raise ValueError("Die Datei ist leer")
+    if sz > 500000000: raise ValueError("Die Datei ist groesser als 500 MB und kann nicht uebergeben werden")
+    name = _fname(a.get("name") or fp); fid = uuid.uuid4().hex[:6]
+    shutil.copyfile(fp, os.path.join(FILES, fid + "__" + name))
+    return (f"{name} ({sz / 1e6:.2f} MB, {sz} Bytes) wurde dem Nutzer unveraendert im Chat als Download uebergeben. Die Uebergabe ist damit erledigt.", [(fid, name)])
 def _store_file(name, data):
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(name))[:80].strip(".") or "datei.bin"
+    name = _fname(name)
     fid = uuid.uuid4().hex[:6]
     with open(os.path.join(FILES, fid + "__" + name), "wb") as f: f.write(data)
     return fid, name
@@ -1553,8 +1663,7 @@ def t_getbuild(a, cfg):
     if rel:
         for asset in rel.get("assets") or []:
             if str(asset.get("name", "")).lower().endswith(exts):
-                data = gh("GET", f"/repos/{repo}/releases/assets/{asset['id']}", tok, raw=True, timeout=180, accept="application/octet-stream")
-                got.append(_store_file(asset["name"], data) + (len(data),))
+                got.append((asset["name"], gh("GET", f"/repos/{repo}/releases/assets/{asset['id']}", tok, raw=True, timeout=180, accept="application/octet-stream")))
         src = "Release " + rel["tag_name"]
     if not got:
         runs = gh("GET", f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=5", tok).get("workflow_runs") or []
@@ -1564,12 +1673,19 @@ def t_getbuild(a, cfg):
             if art.get("expired") or art.get("size_in_bytes", 0) > 500000000: continue
             z = zipfile.ZipFile(io.BytesIO(gh("GET", f"/repos/{repo}/actions/artifacts/{art['id']}/zip", tok, raw=True, timeout=240)))
             for n in z.namelist():
-                if n.lower().endswith(exts):
-                    data = z.read(n); got.append(_store_file(n, data) + (len(data),))
+                if n.lower().endswith(exts): got.append((os.path.basename(n), z.read(n)))
         src = f"Build-Lauf {run['id']}"
     if not got: raise ValueError("Im Build wurden keine passenden Dateien gefunden (" + ", ".join(exts) + ")")
-    return (f"Aus {src} (Commit {sha[:7]}) geholt. Der Nutzer sieht sie jetzt im Chat als Download: " + ", ".join(f"{n} ({sz / 1e6:.1f} MB)" for _i, n, sz in got)
-            + ". Damit ist die Uebergabe erledigt. Die Dateien nicht entpacken oder weiter untersuchen: ein erfolgreicher Build ist der Nachweis.", [(i, n) for i, n, _s in got])
+    inhalt = ", ".join(f"{n} ({len(dt) / 1e6:.1f} MB)" for n, dt in got)
+    if a.get("zip"):
+        zname = _fname(repo.split("/")[1] + "_alle.zip"); fid = uuid.uuid4().hex[:6]; zp = os.path.join(FILES, fid + "__" + zname)
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_STORED) as zf:
+            for n, dt in got: zf.writestr(_fname(n), dt)
+        files = [(fid, zname)]; was = f"ein ZIP {zname} ({os.path.getsize(zp) / 1e6:.1f} MB) mit: {inhalt}"
+    else:
+        files = [_store_file(n, dt) for n, dt in got]; was = inhalt
+    return (f"Aus {src} (Commit {sha[:7]}) geholt. Der Nutzer sieht jetzt im Chat als Download: {was}. Damit ist die Uebergabe erledigt. "
+            "Die Dateien nicht entpacken oder weiter untersuchen: ein erfolgreicher Build ist der Nachweis.", files)
 
 def notes_read():
     try: return open(NOTES, encoding="utf-8").read().strip()
@@ -1595,10 +1711,10 @@ def guide(name):
     return ""
 
 DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "write_file": t_write, "edit_file": t_edit, "search": t_search,
-          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild}
+          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild, "send_file": t_sendfile, "use_upload": t_upload, "build_rerun": t_rerun}
 DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
              "search": ("Suche", "pattern"), "run": ("Fuehre aus", "command"), "git_clone": ("Hole Repo", "repo"), "git_push": ("Commit + Push", "message"),
-             "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project")}
+             "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project"), "send_file": ("Uebergebe Datei", "path"), "use_upload": ("Uebernehme Anhang", "id"), "build_rerun": ("Starte Build neu", "project")}
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": req}}}
 _S = lambda d: {"type": "string", "description": d}
@@ -1613,18 +1729,26 @@ DEV_TOOLS = [
  _fn("edit_file", "Ersetzt in einer Datei einen exakten Textabschnitt. Fuer gezielte Aenderungen an vorhandenen Dateien.",
      {"path": _S("Dateipfad"), "old": _S("exakter vorhandener Text (ohne Zeilennummern), muss eindeutig sein"), "new": _S("neuer Text"),
       "all": {"type": "boolean", "description": "alle Vorkommen ersetzen"}}, ["path", "old", "new"]),
- _fn("search", "Sucht ein Muster (Regex, ohne Gross/Klein) in den Projektdateien.", {"pattern": _S("Suchmuster"), "path": _S("Ordner oder Datei, leer = alles")}, ["pattern"]),
+ _fn("search", "Sucht ein Muster (Regex, ohne Gross/Klein) in den Projektdateien.", {"pattern": _S("Suchmuster"), "path": _S("Ordner oder Datei, leer = alles"),
+     "context": {"type": "integer", "description": "0 bis 3 Zeilen vor und nach jedem Treffer mit ausgeben"}}, ["pattern"]),
  _fn("run", "Fuehrt einen Shell-Befehl (bash) im Projektordner aus und liefert Ausgabe und Exit-Code. Fuer Syntaxpruefung, Tests, Skripte. Keine Dauerlaeufer oder Server starten.",
      {"command": _S("Shell-Befehl"), "cwd": _S("Arbeitsordner relativ zum Projektordner"), "timeout": {"type": "integer", "description": "Sekunden, Standard 120, hoechstens 600"}}, ["command"]),
  _fn("git_clone", "Holt ein GitHub-Repo in den Projektordner oder aktualisiert es, wenn es schon da ist. Ohne Angaben wird das in den Einstellungen hinterlegte Repo genommen.",
      {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard")}, []),
  _fn("git_push", "Committet Aenderungen eines Projekts und pusht sie zu GitHub (aktueller Branch). Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt.",
      {"project": _S("Projektordner, z.B. Satanic-AI"), "message": _S("kurze Commit-Nachricht"), "files": {"type": "array", "items": {"type": "string"}, "description": "nur diese Dateien pushen (Pfade relativ zum Projekt)"},
+      "skip_check": {"type": "boolean", "description": "Syntaxpruefung vor dem Push auslassen. Nur wenn sie nachweislich falsch liegt."},
       "repo": _S("nur fuer neue Projekte: besitzer/name")}, ["project", "message"]),
  _fn("build_status", "Wartet auf den GitHub-Actions-Lauf zum letzten Commit des Projekts und liefert Ergebnis, Jobs und bei Fehlern das Log-Ende.",
      {"project": _S("Projektordner"), "wait": {"type": "boolean", "description": "auf das Ende warten (Standard true)"}}, ["project"]),
  _fn("get_build", "Holt die fertig gebauten Dateien (ipa, apk, exe) zum letzten Commit von GitHub und gibt sie dem Nutzer im Chat als Download. Erst nach erfolgreichem build_status aufrufen.",
-     {"project": _S("Projektordner"), "which": _S("ipa, apk, exe oder alle (Standard alle)")}, ["project"]),
+     {"project": _S("Projektordner"), "which": _S("ipa, apk, exe oder alle (Standard alle)"), "zip": {"type": "boolean", "description": "true = alle geholten Dateien in EINEM ZIP uebergeben"}}, ["project"]),
+ _fn("send_file", "Uebergibt eine vorhandene Datei aus dem Projektordner unveraendert an den Nutzer als Download im Chat. Fuer alles, was schon als Datei existiert: ZIP, Bilder, Programme, Binaerdateien, grosse Dateien.",
+     {"path": _S("Dateipfad im Projektordner, z.B. MeinProjekt/_tmp/paket.zip"), "name": _S("Dateiname fuer den Download (optional)")}, ["path"]),
+ _fn("use_upload", "Legt einen Anhang aus dem Chat (hochgeladenes oder erzeugtes Bild, hochgeladenes Dokument als Text) als Datei ins Projekt.",
+     {"id": _S("Kennung des Anhangs, z.B. img_1a2b3c, gen_1a2b3c oder doc_1a2b3c"), "path": _S("Ziel im Projekt, z.B. MeinProjekt/icon.png")}, ["id", "path"]),
+ _fn("build_rerun", "Startet den GitHub-Actions-Lauf zum letzten Commit neu, ohne etwas zu pushen. Fuer Builds, die ohne Code-Fehler gescheitert sind (Aussetzer bei GitHub).",
+     {"project": _S("Projektordner")}, ["project"]),
 ]
 
 def dev_prompt(cfg):
@@ -1632,7 +1756,11 @@ def dev_prompt(cfg):
     except Exception: projs = []
     return (
      " DEV-MODUS IST AKTIV: Du arbeitest zusaetzlich als Programmier-Agent mit eigenem Projektordner auf dem Server. Alle Pfade sind relativ dazu, z.B. 'Satanic-AI/app.html'. "
-     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build. "
+     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build, send_file, use_upload, build_rerun. "
+     "Ein Bild oder Dokument aus dem Chat holst du mit use_upload ins Projekt; suche nie selbst auf dem Server danach. git_push prueft vor dem Push die Syntax der geaenderten Dateien und lehnt bei Fehlern ab. "
+     "DATEIEN AN DEN NUTZER: create_file kann NUR Text und PDF aus Text erzeugen, den du selbst schreibst; niemals ZIP, Bilder oder andere Binaerdateien damit uebergeben. "
+     "Eine Datei, die im Projektordner schon existiert (auch ein mit run gebautes ZIP), uebergibst du mit send_file. Will der Nutzer ipa, apk und exe in einem ZIP: get_build mit zip=true. "
+     "Nenne dem Nutzer nur Dateigroessen, die ein Werkzeug fuer die uebergebene Datei gemeldet hat. "
      "Will der Nutzer die fertige ipa, apk oder exe haben: nach erfolgreichem build_status get_build aufrufen, dann erscheinen die Dateien bei ihm als Download. Lade Build-Dateien nie selbst mit curl oder gh herunter und pruefe ihren Inhalt nicht. "
      "Schreibe NIE einen Zugangs-Token (ghp_..., github_pat_...) in einen Befehl, eine Datei oder eine Notiz, auch wenn er im Chat steht; die GitHub-Werkzeuge nutzen den hinterlegten Token von selbst. "
      "Pruefe vor git_push mit 'git status --short', dass nur gewollte Dateien geaendert sind, oder gib bei git_push files an. "
@@ -1699,38 +1827,42 @@ def compact(msgs, budget=60000):
 def dev_api(d):
     c = dev_load(); act = d.get("action") or "status"; key = d.get("key")
     if act == "status":
-        ok = dev_check(key) if c.get("hash") and key else False
-        r = {"set": bool(c.get("hash")), "ok": ok, "shell": SHELL_OK}
-        if ok: r.update({"repo": c.get("repo", ""), "branch": c.get("branch", ""), "login": c.get("login", ""), "has_token": bool(c.get("token"))})
+        u = dev_unlock(key) if c.get("hash") and key else None
+        r = {"set": bool(c.get("hash")), "ok": u is not None, "shell": SHELL_OK, "sealed": SEALED[0]}
+        if u: r.update({"repo": u.get("repo", ""), "branch": u.get("branch", ""), "login": u.get("login", ""), "has_token": bool(u.get("token"))})
         return r
     if act != "save": raise ValueError("unbekannte Aktion")
     if c.get("hash"):
-        if not dev_check(key): raise PermissionError("Dev-Passwort falsch")
+        u = dev_unlock(key)
+        if u is None: raise PermissionError("Dev-Passwort falsch")
+        c = dev_load(); k = u["_k"]; tok = u["token"]
     else:
         if not isinstance(key, str) or len(key) < 8: raise ValueError("Dev-Passwort festlegen (mindestens 8 Zeichen)")
-        c["salt"] = os.urandom(16).hex(); c["hash"] = _pwhash(key, c["salt"])
+        c["salt"] = os.urandom(16).hex(); c["hash"], k = _derive(key, c["salt"]); tok = ""
     nk = d.get("newkey")
     if isinstance(nk, str) and nk:
         if len(nk) < 8: raise ValueError("neues Passwort zu kurz (mindestens 8 Zeichen)")
-        c["salt"] = os.urandom(16).hex(); c["hash"] = _pwhash(nk, c["salt"])
+        c["salt"] = os.urandom(16).hex(); c["hash"], k = _derive(nk, c["salt"])
     note = []
     if d.get("clear_token"):
-        for k in ("token", "login", "uid"): c.pop(k, None)
-        note.append("Token geloescht")
-    tok = d.get("token")
-    if isinstance(tok, str) and tok.strip():
-        tok = tok.strip(); u = gh("GET", "/user", tok)
-        c["token"] = tok; c["login"] = u.get("login", ""); c["uid"] = u.get("id"); note.append("Token gueltig fuer " + c["login"])
+        for x in ("login", "uid"): c.pop(x, None)
+        tok = ""; note.append("Token geloescht")
+    nt = d.get("token")
+    if isinstance(nt, str) and nt.strip():
+        tok = nt.strip(); u2 = gh("GET", "/user", tok)
+        c["login"] = u2.get("login", ""); c["uid"] = u2.get("id"); note.append("Token gueltig fuer " + c["login"] + ", verschluesselt gespeichert")
     if "repo" in d: c["repo"] = repo_ok(d["repo"]) if str(d.get("repo") or "").strip() else ""
     if "branch" in d: c["branch"] = branch_ok(d.get("branch"))
+    c.pop("token", None); c.pop("tok", None)
+    if tok: c["tok"] = tok_seal(k, tok)
     dev_save(c)
-    if c.get("repo") and c.get("token"):
+    if c.get("repo") and tok:
         try:
-            p = gh("GET", "/repos/" + c["repo"], c["token"]).get("permissions") or {}
+            p = gh("GET", "/repos/" + c["repo"], tok).get("permissions") or {}
             note.append("Repo " + c["repo"] + (": Schreibzugriff ok" if p.get("push") else ": NUR LESEZUGRIFF, Pushen wird scheitern"))
         except ValueError as e: note.append(f"Repo {c['repo']} nicht erreichbar ({e})")
-    return {"ok": True, "set": True, "repo": c.get("repo", ""), "branch": c.get("branch", ""), "login": c.get("login", ""), "has_token": bool(c.get("token")),
-            "shell": SHELL_OK, "note": ". ".join(note) or "Gespeichert"}
+    return {"ok": True, "set": True, "repo": c.get("repo", ""), "branch": c.get("branch", ""), "login": c.get("login", ""), "has_token": bool(tok),
+            "shell": SHELL_OK, "sealed": SEALED[0], "note": ". ".join(note) or "Gespeichert"}
 
 # ---------------- Auftraege: laufen weiter, auch wenn die Verbindung abreisst ----------------
 JOBS = {}; JLOCK = threading.Lock()
@@ -1758,8 +1890,8 @@ def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
         else:
             dev = None
             if req_j.get("dev") and not notools:
-                if not dev_check(req_j.get("devkey")): raise ValueError("Dev-Modus gesperrt: Dev-Passwort fehlt oder ist falsch (opt > Dev-Einstellungen).")
-                dev = dev_load()
+                dev = dev_unlock(req_j.get("devkey"))
+                if dev is None: raise ValueError("Dev-Modus gesperrt: Dev-Passwort fehlt oder ist falsch (opt > Dev-Einstellungen).")
             chat(msgs, emit, fast, not notools, opts, think, dev)
     except JobStop: job_emit(j, {"type": "stopped"}, True)
     except Exception as e: job_emit(j, {"type": "error", "text": f"{type(e).__name__}: {e}"}, True)
@@ -1780,7 +1912,7 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
-            return self._send(200, open(os.path.join(HERE, "index.html"), "rb").read(), "text/html; charset=utf-8")
+            return self._send(200, INDEX, "text/html; charset=utf-8")
         if u.path == "/api/job":
             q = parse_qs(u.query); jid = (q.get("id") or [""])[0]
             try: start = max(0, int((q.get("from") or ["0"])[0]))
@@ -1905,7 +2037,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         self._send(404, {"error": "nicht gefunden"})
 
+INDEX = open(os.path.join(HERE, "index.html"), "rb").read()
 if __name__ == "__main__":
+    seal_probe()
     threading.Thread(target=idle_watch, daemon=True).start()
     print(f"Chat-App auf Port {PORT} (LLM {LLM}, ComfyUI {COMFY})", flush=True)
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
