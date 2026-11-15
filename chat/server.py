@@ -1195,7 +1195,7 @@ ASKPASS = os.path.join(HERE, "askpass.sh")
 GITIGN = os.path.join(HERE, "dev_gitignore")
 MAX_ITER_DEV = 60
 NOTES = os.path.join(STORE, "dev_notes.md")
-DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build"}
+DEV_RO = {"list_files", "read_file", "search", "run", "build_status", "get_build", "send_file"}
 DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push"}
 DEVLOCK = threading.Lock()
 SKIP = {".git", "node_modules", "__pycache__", ".gradle", "Pods", ".venv", "DerivedData"}
@@ -1533,8 +1533,18 @@ def t_build(a, cfg):
         except Exception: pass
     return "\n".join(out)
 
+def _fname(name): return re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(str(name)))[:80].strip(".") or "datei.bin"
+def t_sendfile(a, cfg):
+    fp = ppath(a.get("path"), True)
+    if os.path.isdir(fp): raise ValueError("path ist ein Ordner. Erst mit run ein ZIP daraus machen und dann das ZIP uebergeben.")
+    sz = os.path.getsize(fp)
+    if sz == 0: raise ValueError("Die Datei ist leer")
+    if sz > 500000000: raise ValueError("Die Datei ist groesser als 500 MB und kann nicht uebergeben werden")
+    name = _fname(a.get("name") or fp); fid = uuid.uuid4().hex[:6]
+    shutil.copyfile(fp, os.path.join(FILES, fid + "__" + name))
+    return (f"{name} ({sz / 1e6:.2f} MB, {sz} Bytes) wurde dem Nutzer unveraendert im Chat als Download uebergeben. Die Uebergabe ist damit erledigt.", [(fid, name)])
 def _store_file(name, data):
-    name = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(name))[:80].strip(".") or "datei.bin"
+    name = _fname(name)
     fid = uuid.uuid4().hex[:6]
     with open(os.path.join(FILES, fid + "__" + name), "wb") as f: f.write(data)
     return fid, name
@@ -1553,8 +1563,7 @@ def t_getbuild(a, cfg):
     if rel:
         for asset in rel.get("assets") or []:
             if str(asset.get("name", "")).lower().endswith(exts):
-                data = gh("GET", f"/repos/{repo}/releases/assets/{asset['id']}", tok, raw=True, timeout=180, accept="application/octet-stream")
-                got.append(_store_file(asset["name"], data) + (len(data),))
+                got.append((asset["name"], gh("GET", f"/repos/{repo}/releases/assets/{asset['id']}", tok, raw=True, timeout=180, accept="application/octet-stream")))
         src = "Release " + rel["tag_name"]
     if not got:
         runs = gh("GET", f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=5", tok).get("workflow_runs") or []
@@ -1564,12 +1573,19 @@ def t_getbuild(a, cfg):
             if art.get("expired") or art.get("size_in_bytes", 0) > 500000000: continue
             z = zipfile.ZipFile(io.BytesIO(gh("GET", f"/repos/{repo}/actions/artifacts/{art['id']}/zip", tok, raw=True, timeout=240)))
             for n in z.namelist():
-                if n.lower().endswith(exts):
-                    data = z.read(n); got.append(_store_file(n, data) + (len(data),))
+                if n.lower().endswith(exts): got.append((os.path.basename(n), z.read(n)))
         src = f"Build-Lauf {run['id']}"
     if not got: raise ValueError("Im Build wurden keine passenden Dateien gefunden (" + ", ".join(exts) + ")")
-    return (f"Aus {src} (Commit {sha[:7]}) geholt. Der Nutzer sieht sie jetzt im Chat als Download: " + ", ".join(f"{n} ({sz / 1e6:.1f} MB)" for _i, n, sz in got)
-            + ". Damit ist die Uebergabe erledigt. Die Dateien nicht entpacken oder weiter untersuchen: ein erfolgreicher Build ist der Nachweis.", [(i, n) for i, n, _s in got])
+    inhalt = ", ".join(f"{n} ({len(dt) / 1e6:.1f} MB)" for n, dt in got)
+    if a.get("zip"):
+        zname = _fname(repo.split("/")[1] + "_alle.zip"); fid = uuid.uuid4().hex[:6]; zp = os.path.join(FILES, fid + "__" + zname)
+        with zipfile.ZipFile(zp, "w", zipfile.ZIP_STORED) as zf:
+            for n, dt in got: zf.writestr(_fname(n), dt)
+        files = [(fid, zname)]; was = f"ein ZIP {zname} ({os.path.getsize(zp) / 1e6:.1f} MB) mit: {inhalt}"
+    else:
+        files = [_store_file(n, dt) for n, dt in got]; was = inhalt
+    return (f"Aus {src} (Commit {sha[:7]}) geholt. Der Nutzer sieht jetzt im Chat als Download: {was}. Damit ist die Uebergabe erledigt. "
+            "Die Dateien nicht entpacken oder weiter untersuchen: ein erfolgreicher Build ist der Nachweis.", files)
 
 def notes_read():
     try: return open(NOTES, encoding="utf-8").read().strip()
@@ -1595,10 +1611,10 @@ def guide(name):
     return ""
 
 DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "write_file": t_write, "edit_file": t_edit, "search": t_search,
-          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild}
+          "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild, "send_file": t_sendfile}
 DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
              "search": ("Suche", "pattern"), "run": ("Fuehre aus", "command"), "git_clone": ("Hole Repo", "repo"), "git_push": ("Commit + Push", "message"),
-             "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project")}
+             "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project"), "send_file": ("Uebergebe Datei", "path")}
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": req}}}
 _S = lambda d: {"type": "string", "description": d}
@@ -1624,7 +1640,9 @@ DEV_TOOLS = [
  _fn("build_status", "Wartet auf den GitHub-Actions-Lauf zum letzten Commit des Projekts und liefert Ergebnis, Jobs und bei Fehlern das Log-Ende.",
      {"project": _S("Projektordner"), "wait": {"type": "boolean", "description": "auf das Ende warten (Standard true)"}}, ["project"]),
  _fn("get_build", "Holt die fertig gebauten Dateien (ipa, apk, exe) zum letzten Commit von GitHub und gibt sie dem Nutzer im Chat als Download. Erst nach erfolgreichem build_status aufrufen.",
-     {"project": _S("Projektordner"), "which": _S("ipa, apk, exe oder alle (Standard alle)")}, ["project"]),
+     {"project": _S("Projektordner"), "which": _S("ipa, apk, exe oder alle (Standard alle)"), "zip": {"type": "boolean", "description": "true = alle geholten Dateien in EINEM ZIP uebergeben"}}, ["project"]),
+ _fn("send_file", "Uebergibt eine vorhandene Datei aus dem Projektordner unveraendert an den Nutzer als Download im Chat. Fuer alles, was schon als Datei existiert: ZIP, Bilder, Programme, Binaerdateien, grosse Dateien.",
+     {"path": _S("Dateipfad im Projektordner, z.B. MeinProjekt/_tmp/paket.zip"), "name": _S("Dateiname fuer den Download (optional)")}, ["path"]),
 ]
 
 def dev_prompt(cfg):
@@ -1632,7 +1650,10 @@ def dev_prompt(cfg):
     except Exception: projs = []
     return (
      " DEV-MODUS IST AKTIV: Du arbeitest zusaetzlich als Programmier-Agent mit eigenem Projektordner auf dem Server. Alle Pfade sind relativ dazu, z.B. 'Satanic-AI/app.html'. "
-     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build. "
+     "Zusaetzliche Werkzeuge: note, list_files, read_file, write_file, edit_file, search, run, git_clone, git_push, build_status, get_build, send_file. "
+     "DATEIEN AN DEN NUTZER: create_file kann NUR Text und PDF aus Text erzeugen, den du selbst schreibst; niemals ZIP, Bilder oder andere Binaerdateien damit uebergeben. "
+     "Eine Datei, die im Projektordner schon existiert (auch ein mit run gebautes ZIP), uebergibst du mit send_file. Will der Nutzer ipa, apk und exe in einem ZIP: get_build mit zip=true. "
+     "Nenne dem Nutzer nur Dateigroessen, die ein Werkzeug fuer die uebergebene Datei gemeldet hat. "
      "Will der Nutzer die fertige ipa, apk oder exe haben: nach erfolgreichem build_status get_build aufrufen, dann erscheinen die Dateien bei ihm als Download. Lade Build-Dateien nie selbst mit curl oder gh herunter und pruefe ihren Inhalt nicht. "
      "Schreibe NIE einen Zugangs-Token (ghp_..., github_pat_...) in einen Befehl, eine Datei oder eine Notiz, auch wenn er im Chat steht; die GitHub-Werkzeuge nutzen den hinterlegten Token von selbst. "
      "Pruefe vor git_push mit 'git status --short', dass nur gewollte Dateien geaendert sind, oder gib bei git_push files an. "

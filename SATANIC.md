@@ -18,7 +18,8 @@
 - Nach jeder Aenderung pruefen: run mit "python3 tools/build_setup.py --check" im Projektordner.
 - Das Setup-Skript hat eine Groessengrenze (die Pruefung nennt sie). Wird sie ueberschritten, startet kein Pod mehr. chat/server.py und chat/index.html deshalb schlank halten: nichts Unnoetiges einbauen, keine grossen eingebetteten Daten.
 - Fertig heisst: git_push, danach build_status. Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
-- Will der Nutzer die fertige ipa, apk oder exe: get_build aufrufen. Nie selbst mit curl oder gh herunterladen.
+- Will der Nutzer die fertige ipa, apk oder exe: get_build aufrufen (alle drei in einem ZIP: zip=true). Nie selbst mit curl oder gh herunterladen.
+- Vorhandene Dateien (ZIP, Bilder, Binaerdateien) mit send_file uebergeben. create_file kann nur Text und PDF.
 - Build-Dateien nicht entpacken oder pruefen. Icons in einer ipa liegen in einem Apple-eigenen PNG-Format, das sich hier nicht lesen laesst. Ein erfolgreicher Build ist der Nachweis.
 - App-Icon: icon.png im Hauptordner, 1024x1024 PNG. Nur diese Datei ersetzen, der Build verteilt sie auf ipa, apk und exe.
 - Vor git_push mit "git status --short" pruefen, dass nur gewollte Dateien geaendert sind, oder bei git_push files angeben.
