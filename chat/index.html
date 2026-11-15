@@ -105,6 +105,18 @@ header button{border:1px solid var(--line);background:#14141b;color:#8a8a96;bord
 #th{color:#e6b13a}
 #back{font-size:16px;padding:5px 10px}
 header b{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:16px}
+#opts{flex-direction:column;flex-wrap:nowrap;align-items:stretch;gap:0;padding:0 2px 8px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:13px;color:var(--tx);max-height:62vh;overflow-y:auto}
+#opts .og{color:#3fb950;font-size:11px;letter-spacing:.08em;margin:6px 2px 0}
+#opts .or{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 10px;margin-top:3px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--tx);cursor:pointer;font-size:13px}
+#opts .ol{display:flex;flex-direction:column;min-width:0}
+#opts .ol small{color:var(--mut);font-size:11px;line-height:1.3;margin-top:2px}
+#opts .or select{flex:none;background:transparent;border:0;padding:0;color:#3fb950;font:inherit;text-align:right;text-align-last:right;max-width:46%}
+#opts input[type=checkbox]{appearance:none;-webkit-appearance:none;flex:none;margin:0;border:0;background:none;font:inherit;color:var(--mut);cursor:pointer}
+#opts input[type=checkbox]::before{content:'[ ]';white-space:pre}
+#opts input[type=checkbox]:checked{color:#3fb950}
+#opts input[type=checkbox]:checked::before{content:'[x]'}
+#opts .or:has(input:checked){border-color:#3fb950}
+#opts .oa{flex:none;color:#3fb950;white-space:nowrap}
 #ctx{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--mut);cursor:pointer;margin-right:4px;white-space:nowrap}
 .dl{display:block;margin:0 0 10px;font-size:13px;color:var(--mut)}.dl input{display:block;width:100%;box-sizing:border-box;margin-top:4px;background:var(--card);color:var(--tx);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:16px;font-family:inherit}
 </style></head><body><div id="fxbg"></div><div id="fxsl"></div><div id="boot"><div class="pwr">⏻</div><pre class="bn"> ███████  █████  ████████  █████  ███    ██ ██  ██████
@@ -128,7 +140,18 @@ header b{font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:16px}
 <p id="dmsg" style="font-size:13px;color:var(--mut);white-space:pre-wrap"></p></div></div>
 <div class="ov" id="gal"><div class="ovh"><h3>Galerie</h3><button id="gx">✕</button></div><div class="ovb"><div id="gg"></div></div></div>
 <div id="vw"><img id="vi"><p id="vp"></p><div class="tb"><button id="vd">⬇</button><button id="vt">✎ Vorlage</button><button id="vr">↻ Neu</button><button id="vx">🗑</button><button id="vc">Schließen</button></div></div>
-<div id="bar"><div id="opts"><select id="ofmt"><option value="">Format: Auto</option><option value="portrait">Hochformat</option><option value="landscape">Querformat</option><option value="square">Quadrat</option></select><select id="on"><option>1</option><option>2</option><option>3</option><option>4</option></select><label><input type="checkbox" id="oup"> Hochskalieren</label><select id="olora"><option value="">LoRA: an</option><option value="low">LoRA: schwach</option><option value="off">LoRA: aus</option></select><label><input type="checkbox" id="othk"> 🧠 Gründlich</label><label><input type="checkbox" id="odev"> 🛠 Dev-Modus</label><label id="odevs" style="cursor:pointer">⚙ Dev-Einstellungen</label></div><div id="chips"></div>
+<div id="bar"><div id="opts">
+<div class="og">&gt; BILD</div>
+<label class="or"><span class="ol">Format<small>Seitenverhältnis der Bilder</small></span><select id="ofmt"><option value="">Auto</option><option value="portrait">Hochformat</option><option value="landscape">Querformat</option><option value="square">Quadrat</option></select></label>
+<label class="or"><span class="ol">Anzahl<small>Bilder pro Auftrag</small></span><select id="on"><option>1</option><option>2</option><option>3</option><option>4</option></select></label>
+<label class="or"><span class="ol">Hochskalieren<small>größer und schärfer, dauert länger</small></span><input type="checkbox" id="oup"></label>
+<label class="or"><span class="ol">LoRA<small>Stil-Zusatz des Bildmodells</small></span><select id="olora"><option value="">an</option><option value="low">schwach</option><option value="off">aus</option></select></label>
+<div class="og">&gt; ANTWORT</div>
+<label class="or"><span class="ol">Gründlich<small>denkt erst nach: besser bei Kniffligem, aber langsamer</small></span><input type="checkbox" id="othk"></label>
+<div class="og">&gt; ENTWICKLER</div>
+<label class="or"><span class="ol">Dev-Modus<small>Satanic darf Dateien ändern, Befehle ausführen und zu GitHub pushen</small></span><input type="checkbox" id="odev"></label>
+<div class="or" id="odevs"><span class="ol">Dev-Einstellungen<small>Passwort, GitHub-Token, Repo</small></span><span class="oa">[ öffnen ]</span></div>
+</div><div id="chips"></div>
 <div id="row"><button class="b" id="att">+</button><button class="b" id="opt">opt</button><button class="b" id="mic" style="display:none">mic</button>
 <textarea id="t" rows="1" placeholder="Nachricht oder /bild …"></textarea>
 <button class="b" id="go">↵</button></div>
@@ -186,12 +209,6 @@ fetch('/api/prefs').then(r=>r.json()).then(p=>{if(p&&p.theme)setTheme(p.theme,fa
 const GREETING='Hi! Ich bin Satanic, deine unzensierte KI. Was kann ich heute für dich tun? 😈';
 function spkText(t){return t.replace(/```[\s\S]*?```/g,' (Code-Block) ').replace(/[*`#_>]/g,'').replace(/\[(Erzeugte|Erstellte)[^\]]*\]/g,'')}
 function speak(t){if(!window.speechSynthesis)return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(spkText(t));u.lang='de-DE';speechSynthesis.speak(u)}
-function spkBtn(t){const b=document.createElement('button');b.className='spk';b.textContent='🔊';b.onclick=()=>{if(window.speechSynthesis&&speechSynthesis.speaking){speechSynthesis.cancel()}else speak(t)};return b}
-function actBtns(t,host){const w=document.createElement('div');w.style.cssText='display:flex;gap:6px;flex-wrap:wrap';w.appendChild(spkBtn(t));
-  const b=document.createElement('button');b.className='spk';b.textContent='📄 PDF';b.onclick=async()=>{b.textContent='…';
-    try{const r=await fetch('/api/pdf',{method:'POST',body:JSON.stringify({text:t})});const j=await r.json();if(j.error)throw new Error(j.error);
-      const ft=fileTag({id:j.id,name:j.name});(host||w.parentNode).appendChild(ft);b.textContent='📄 PDF'}catch(e){b.textContent='📄 PDF';alert('PDF fehlgeschlagen: '+e.message)}};
-  w.appendChild(b);return w}
 function render(){setTimeout(ctxUpd,0);
   $('#msgs').innerHTML='';
   if(!hist.length)el('m a',GREETING);
@@ -203,7 +220,6 @@ function render(){setTimeout(ctxUpd,0);
     if(m.role==='user'&&m.images&&m.images.length){const w=document.createElement('div');w.className='ims';m.images.forEach(x=>w.appendChild(imgTag(x.id)));d.appendChild(w)}
     if(m.role==='assistant'&&m.images)m.images.forEach(x=>d.appendChild(imgTag(x)));
     if(m.role==='assistant'&&m.files)m.files.forEach(f=>d.appendChild(fileTag(f)));
-    if(m.role==='assistant'&&m.text&&!m.banner)d.appendChild(actBtns(m.text,d));
   }scroll()}
 async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
 status();setInterval(status,15000);
@@ -269,7 +285,7 @@ try{$('#odev').checked=localStorage.getItem('dev')==='1'&&!!devKey}catch(e){}
 function devOn(v){$('#odev').checked=v;try{localStorage.setItem('dev',v?'1':'0')}catch(e){}optMark()}
 async function devApi(b){const r=await fetch('/api/dev',{method:'POST',body:JSON.stringify(b)});const j=await r.json();if(!r.ok)throw new Error(j.error||'Fehler');return j}
 function devFill(s){devOpenOk=true;$('#drepo').value=s.repo||'';$('#dbr').value=s.branch||'';
-  return (s.has_token?'GitHub-Token gespeichert'+(s.login?' ('+s.login+')':''):'Noch kein GitHub-Token gespeichert')+'.'+(s.shell?'':'\n⚠️ Befehle ausführen ist auf diesem Server nicht verfügbar.')}
+  return (s.has_token?'GitHub-Token gespeichert'+(s.login?' ('+s.login+')':''):'Noch kein GitHub-Token gespeichert')+'.'+(s.shell?'':'\n⚠️ Befehle ausführen ist auf diesem Server nicht verfügbar.')+(s.sealed===false?'\n⚠️ Auf diesem Server greifen Dateirechte nicht. Der Token ist deshalb verschlüsselt gespeichert.':s.sealed===true?'\n🔒 Speicher ist gegen die Shell abgeschottet.':'')}
 async function devOpen(){$('#dev').classList.add('on');$('#dkey').value=devKey;$('#dtok').value='';devOpenOk=false;const m=$('#dmsg');m.textContent='…';
   try{const s=await devApi({action:'status',key:devKey});devSet=!!s.set;
     if(!s.set)m.textContent='Noch kein Dev-Passwort festgelegt. Lege jetzt eines fest (mindestens 8 Zeichen) und tippe auf Speichern.';
@@ -402,7 +418,7 @@ async function runAssistant(regenId,resumeJid){
     setLost(false);
   }catch(e){const t=document.createElement('div');t.className='tool';t.style.color='#f08a7a';t.textContent='Verbindungsfehler: '+e;bub.appendChild(t)}
   unthk();while(shown<a.text.length){await new Promise(r=>setTimeout(r,30))}
-  cur.remove();a.text=clean(a.text);if(a.text){rich(tn,a.text);bub.appendChild(actBtns(a.text,bub));if(localStorage.getItem('autoread')==='1')speak(a.text)}
+  cur.remove();a.text=clean(a.text);if(a.text){rich(tn,a.text);if(localStorage.getItem('autoread')==='1')speak(a.text)}
   spin.remove();curJob=null;try{localStorage.removeItem('job')}catch(e){}save();
   try{if(estTok()>ctxLimit())await autoNext()}catch(e){}
   busy=false;goBusy(false);scroll()}

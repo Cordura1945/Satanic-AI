@@ -68,7 +68,7 @@ Weg A: nur bestimmte Repos (weniger Zugriff)
    Contents: Read and write
    Workflows: Read and write (sonst kann die KI die Build-Datei
    nicht aendern)
-   Actions: Read-only (damit die KI das Build-Ergebnis lesen kann)
+   Actions: Read and write (Build-Ergebnis lesen, Build neu starten)
 5) "Generate token" antippen und den Token SOFORT kopieren.
    Er beginnt mit github_pat_.
 
