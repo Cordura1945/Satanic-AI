@@ -692,7 +692,7 @@ struct ContentView: View {
         guard let url = Bundle.main.url(forResource: "splash", withExtension: "mp4") else {
             videoOpacity = 0; uiOpacity = 1; return
         }
-        try? AVAudioSession.sharedInstance().setCategory(.ambient)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         let p = AVPlayer(url: url)
         player = p
