@@ -449,6 +449,49 @@ final class Model: ObservableObject {
         }
     }
 
+    // MARK: - Autostart: wiederholt den Start, bis ein Pod laeuft oder der Nutzer abbricht
+    @Published var autoRun = false
+    @Published var autoInfo = ""
+    private var retryable = false
+    // GPUs, die ueber dem Preislimit lagen, werden waehrend des Autostarts 10 Minuten uebersprungen,
+    // damit nicht staendig teure Pods angelegt und gleich wieder beendet werden.
+    private var skipUntil: [String: Date] = [:]
+
+    func autoStart() async {
+        guard !autoRun, !busy else { return }
+        autoRun = true
+        skipUntil = [:]
+        UIApplication.shared.isIdleTimerDisabled = true
+        var n = 0
+        while autoRun {
+            n += 1
+            await checkLicense()
+            if !licenseOK { licenseMsg = "Lizenz ungültig – Start blockiert. Bitte Lizenz-Key prüfen."; break }
+            retryable = false
+            autoInfo = n == 1 ? "" : "Autostart: Versuch \(n) läuft…"
+            await start()
+            if podId != nil {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                break
+            }
+            if !retryable { break }
+            var s = 30
+            while s > 0 && autoRun {
+                autoInfo = "Autostart: Versuch \(n) ohne passende GPU. Nächster Versuch in \(s) s."
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                s -= 1
+            }
+        }
+        autoRun = false
+        autoInfo = ""
+        UIApplication.shared.isIdleTimerDisabled = false
+    }
+
+    func stopAuto() {
+        autoRun = false
+        autoInfo = ""
+    }
+
     func start() async {
         guard !busy else { return }
         guard !(apiKey.isEmpty && vastKey.isEmpty), !hfToken.isEmpty else {
@@ -496,6 +539,15 @@ final class Model: ObservableObject {
         for entry in (apiKey.isEmpty ? [] : list) {
             let n = entry.hasPrefix("2x ") ? 2 : 1
             let g = n == 2 ? String(entry.dropFirst(3)) : entry
+            if let t = skipUntil[entry], t > Date() {
+                errs.append("\(entry): zuletzt über dem Preislimit, wird gerade übersprungen")
+                if dev {
+                    message = "Dev-Server: Keine GPU im Preislimit von $\(String(format: "%.2f", limit))/h frei.\n\n" + errs.joined(separator: "\n")
+                    retryable = true
+                    return
+                }
+                continue
+            }
             message = "Versuche \(entry)…"
             do {
                 let m = RunPod.deployMutation(gpu: g, image: image, disk: dev ? max(disk, 80) : disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, lic: licKey)
@@ -505,7 +557,9 @@ final class Model: ObservableObject {
                     if limit > 0 && c > limit {
                         _ = try? await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
                         errs.append("\(entry): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
+                        if autoRun { skipUntil[entry] = Date().addingTimeInterval(600) }
                         if dev {
+                            retryable = true
                             message = "Dev-Server: Die günstigste freie GPU (\(entry)) kostet $\(String(format: "%.2f", c))/h und liegt über deinem Limit von $\(String(format: "%.2f", limit))/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen." + (errs.count > 1 ? "\n\nGünstigere Varianten, nicht bekommen:\n" + errs.dropLast().joined(separator: "\n") : "")
                             return
                         }
@@ -528,6 +582,7 @@ final class Model: ObservableObject {
             return
         }
         message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
+        retryable = true
     }
 
     func startVast(b64: String, errs prev: [String]) async {
@@ -566,6 +621,7 @@ final class Model: ObservableObject {
             errs.append("Vast.ai: \(error.localizedDescription)")
         }
         message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
+        retryable = true
     }
 
     func deleteVolume() async {
@@ -977,16 +1033,16 @@ struct ContentView: View {
                         }
                     }
                 }
-                GoldButton(title: m.busy ? "Starte…" : "Starten") {
-                    Task {
-                        await m.checkLicense()
-                        if m.licenseOK {
-                            await m.start()
-                        } else {
-                            m.licenseMsg = "Lizenz ungültig – Start blockiert. Bitte Lizenz-Key prüfen."
-                        }
+                if m.autoRun {
+                    GoldButton(title: "Autostart beenden", danger: true) { m.stopAuto() }
+                    if !m.autoInfo.isEmpty {
+                        Text(m.autoInfo).font(Theme.mono(12, bold: true)).foregroundColor(Theme.gold)
                     }
-                }.disabled(m.busy)
+                } else {
+                    GoldButton(title: m.busy ? "Starte…" : "Starten") {
+                        Task { await m.autoStart() }
+                    }.disabled(m.busy)
+                }
             } else {
                 Card {
                     Text(title).font(Theme.mono(17, bold: true)).foregroundColor(m.phase == .ready ? Theme.green : .white)

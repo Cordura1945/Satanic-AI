@@ -70,7 +70,8 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
    <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
    <div id="volSize"><label style="margin-top:0">Größe (GB)<input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
-  <button class="btn" id="go" style="margin-top:14px" onclick="start()">Starten</button>
+  <button class="btn" id="go" style="margin-top:14px" onclick="goClick()">Starten</button>
+  <div class="s gold" id="autoInfo" style="margin-top:8px;font-weight:700"></div>
  </div>
  <div id="runView" style="display:none">
   <div class="card">
@@ -210,7 +211,7 @@ async function startVast(b64,errs){
       errs.push(`Vast.ai ${gn}: ${r.msg||r.error||"HTTP "+c2}`);
     }
   }catch(e){errs.push("Vast.ai: "+e.message)}
-  msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
+  msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));RETRY=true;
 }
 async function pollRP(){
   if(!g("apiKey"))return false;
@@ -269,6 +270,19 @@ async function licGate(){
   if(!await checkLicense()){closeChat();if(licWhy==="abgelaufen"&&S.podId){await stopPod(true);msg("Test-Lizenz abgelaufen – der Server wurde beendet.")}}
   draw();return licOK}
 $("licBtn").addEventListener("click",()=>checkLicense());
+/* ---- Autostart: wiederholt den Start, bis ein Pod laeuft oder der Nutzer abbricht ---- */
+let AUTO=false,RETRY=false,SKIP={},autoTxt="";
+async function autoStart(){
+  if(AUTO||S.busy)return;AUTO=true;SKIP={};let n=0;
+  while(AUTO){
+    n++;RETRY=false;autoTxt=n===1?"":"Autostart: Versuch "+n+" läuft…";draw();
+    await start();
+    if(S.podId||!RETRY)break;
+    for(let s=30;s>0&&AUTO;s--){autoTxt="Autostart: Versuch "+n+" ohne passende GPU. Nächster Versuch in "+s+" s.";draw();await new Promise(r=>setTimeout(r,1000))}
+  }
+  AUTO=false;autoTxt="";draw();
+}
+function goClick(){if(AUTO){AUTO=false;autoTxt="";draw()}else autoStart()}
 async function start(){
   if(S.busy)return;
   if(!await checkLicense()){msg("Lizenz ungültig – Start blockiert.");$("set").open=true;return}
@@ -291,20 +305,21 @@ async function start(){
     const dev=g("mode")==="dev",errs=[],maxP=parseFloat(g(dev?"devMaxPrice":"maxPrice"))||0;
     for(const en of (g("apiKey")?(dev?GLD:g("gpus").split("\n")):[]).map(x=>x.trim()).filter(Boolean)){
       const n=en.startsWith("2x ")?2:1,gp=n===2?en.slice(3):en;
+      if((SKIP[en]||0)>Date.now()){errs.push(en+": zuletzt über dem Preislimit, wird gerade übersprungen");if(dev){msg(`Dev-Server: Keine GPU im Preislimit von $${maxP.toFixed(2)}/h frei.\n\n`+errs.join("\n"));RETRY=true;return}continue}
       msg("Versuche "+en+"…");
       try{
         const {data:d,err}=await gql(deploy(gp,vol,dcid,window.SETUP_B64,n,dev));
         const p=d.podFindAndDeployOnDemand;
         if(p&&p.id){
           const c=p.costPerHr||0;
-          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(dev){msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`+(errs.length>1?"\n\nGünstigere Varianten, nicht bekommen:\n"+errs.slice(0,-1).join("\n"):""));return}continue}
+          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(AUTO)SKIP[en]=Date.now()+600000;if(dev){RETRY=true;msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`+(errs.length>1?"\n\nGünstigere Varianten, nicht bekommen:\n"+errs.slice(0,-1).join("\n"):""));return}continue}
           S.podId=p.id;LS.setItem("ks_gpuUsed",gp);msg("Pod erstellt: "+gp);await poll();return;
         }
         errs.push(gp+": "+(err||"keine Antwort"));
       }catch(e){errs.push(gp+": "+e.message)}
     }
     if(g("vastKey")&&!dev){await startVast(window.SETUP_B64,errs);return}
-    msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
+    msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));RETRY=true;
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
 }
@@ -332,7 +347,7 @@ function draw(){
   const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");rb("dev","Dev-Server");
   volTxt();$("volCard").style.display=mode==="volume"?"":"none";
   $("volInfo").textContent=S.volId?"Vorhandenes Volume: "+S.volInfo:"";$("delVol").style.display=S.volId?"":"none";$("volSize").style.display=S.volId?"none":"";
-  $("go").disabled=S.busy;$("go").textContent=S.busy?"Starte…":"Starten";
+  $("go").disabled=S.busy&&!AUTO;$("go").textContent=AUTO?"Autostart beenden":S.busy?"Starte…":"Starten";$("go").className="btn"+(AUTO?" dan":"");$("autoInfo").textContent=autoTxt;
   $("ttl").textContent=TT[S.phase];$("ttl").className=S.phase==="ready"?"grn":"";$("info").textContent=S.info;
   const pf=Math.round(Math.min(Math.max(S.shown,0),100)/100*24);$("pbar").innerHTML='<span class="gry">[</span><span class="red">'+"#".repeat(pf)+'</span><span class="dim">'+"-".repeat(24-pf)+'</span><span class="gry">] </span><span class="gold">'+Math.floor(S.shown)+'%</span>';$("eta").textContent=S.eta;
   $("st").textContent=TT[S.phase].toLowerCase();$("sbar").className="sbar"+(none||S.phase==="ready"?"":" busy");$("rate").textContent="$"+Number(S.spend).toFixed(2)+"/h";
