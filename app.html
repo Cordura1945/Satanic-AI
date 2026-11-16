@@ -293,7 +293,8 @@ async function start(){
       }catch(e){errs.push(gp+": "+e.message)}
     }
     if(g("vastKey")){await startVast(window.SETUP_B64,errs);return}
-    msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
+    let extra=dcid?`Im Rechenzentrum ${dcid} ist gerade keine passende GPU frei. Später erneut versuchen, oder auf On Demand wechseln, oder das Volume löschen und ein anderes Rechenzentrum eintragen.\n`:"";
+    msg(extra+"Keine GPU frei oder Fehler:\n"+errs.join("\n"));
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
 }
