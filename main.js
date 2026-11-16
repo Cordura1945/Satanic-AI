@@ -1,11 +1,13 @@
 const { app, BrowserWindow, shell, Menu } = require("electron");
 const path = require("path");
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+// Der Speicherort bleibt der bisherige, damit Einstellungen und Lizenzbindung beim Umbenennen erhalten bleiben
+app.setPath("userData", path.join(app.getPath("appData"), "KI-Start"));
 function create() {
   Menu.setApplicationMenu(null);
   const w = new BrowserWindow({
     width: 520, height: 920, minWidth: 380, minHeight: 600,
-    backgroundColor: "#000000", title: "KI-Start",
+    backgroundColor: "#09090b", title: "Satanic",
     icon: path.join(__dirname, "icon.png"),
     webPreferences: { webSecurity: false, contextIsolation: true }
   });

@@ -1,6 +1,6 @@
 {
   "appId": "com.kistart.app",
-  "appName": "KI-Start",
+  "appName": "Satanic",
   "webDir": "www",
   "backgroundColor": "#000000",
   "plugins": { "CapacitorHttp": { "enabled": true } }

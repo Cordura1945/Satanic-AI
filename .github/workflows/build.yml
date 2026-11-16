@@ -113,7 +113,7 @@ jobs:
         '
     - run: npm install
     - name: Capacitor-Konfiguration schreiben
-      run: "cat > capacitor.config.json <<'CFG'\n{\n  \"appId\": \"com.kistart.app\",\n  \"appName\": \"KI-Start\",\n  \"webDir\": \"www\",\n  \"backgroundColor\": \"#000000\",\n  \"plugins\": { \"CapacitorHttp\": { \"enabled\": true } }\n}\nCFG\ncat capacitor.config.json\n"
+      run: "cat > capacitor.config.json <<'CFG'\n{\n  \"appId\": \"com.kistart.app\",\n  \"appName\": \"Satanic\",\n  \"webDir\": \"www\",\n  \"backgroundColor\": \"#000000\",\n  \"plugins\": { \"CapacitorHttp\": { \"enabled\": true } }\n}\nCFG\ncat capacitor.config.json\n"
     - run: npx cap add android
     - name: App-Icon erzeugen
       continue-on-error: true

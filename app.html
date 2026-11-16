@@ -1,75 +1,91 @@
 <!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>KI-Start</title>
+<title>Satanic</title>
 <style>
-:root{--gold:#e3b04b;--red:#e6473a;--card:rgba(28,13,18,.72)}
+:root{--gold:#e6b03b;--red:#e0574f;--grn:#4ad180;--blu:#59a6e0;--gry:#8a8a96;--dim:#3b3b45;--line:#2b2b36;--bar:#1a1a21;--rose:#9e3030}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;height:100%;background:#000;color:#fff;font:16px/1.45 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
-#bg{position:fixed;inset:0;background:#000 url(bg.jpg) center/cover no-repeat}
+html,body{margin:0;height:100%;background:#09090b;color:#fff;font:13px/1.45 ui-monospace,"SF Mono",Menlo,Consolas,"Cascadia Mono","DejaVu Sans Mono",monospace}
+#bg{position:fixed;inset:0;background:radial-gradient(520px circle at 50% 12%,rgba(140,20,26,.34),transparent),#09090b}
 #sp{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;transition:opacity .8s ease-out;z-index:5}
-#ui{position:relative;z-index:2;height:100%;overflow:auto;padding:max(16px,env(safe-area-inset-top)) 16px 40px;opacity:0;transform:translateY(24px);transition:opacity 4s ease-in-out,transform 4s ease-in-out}
+#ui{position:fixed;inset:0;z-index:2;padding:max(4px,env(safe-area-inset-top)) 8px max(4px,env(safe-area-inset-bottom));opacity:0;transform:translateY(24px);transition:opacity 4s ease-in-out,transform 4s ease-in-out}
 #ui.on{opacity:1;transform:none}
 #ui.fast{transition:opacity .8s ease-out,transform .8s ease-out}
-.w{max-width:560px;margin:auto;display:flex;flex-direction:column;gap:16px}
-.card{background:var(--card);border:1px solid rgba(227,176,75,.25);border-radius:18px;padding:16px;backdrop-filter:blur(2px)}
-.card.sel{border:2px solid var(--gold);padding:15px}
-.cap{font-size:12px;font-weight:700;color:var(--gold);letter-spacing:.04em}
-.big{font-size:36px;font-weight:700}.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
-.s{font-size:13px;opacity:.88}.red{color:var(--red)}.grn{color:#5fd068}
-a{color:var(--gold)}
-.btn{width:100%;border:none;border-radius:14px;padding:15px;font:inherit;font-weight:700;color:#201000;background:linear-gradient(#f0c866,#d19a2e);cursor:pointer}
-.btn.dan{background:linear-gradient(#e6473a,#a8261c);color:#fff}.btn:disabled{opacity:.5}
-.lnk{background:none;border:none;color:var(--gold);font:inherit;font-size:13px;padding:6px 0;cursor:pointer;text-align:left}
-input{width:100%;background:rgba(0,0,0,.45);color:#fff;border:1px solid rgba(227,176,75,.3);border-radius:10px;padding:11px;font:inherit;font-size:14px;margin-top:8px}
-label{display:block;font-size:13px;margin-top:12px}
-.bar{height:12px;border-radius:6px;background:rgba(255,255,255,.14);overflow:hidden;margin:10px 0 4px}
-.bar i{display:block;height:100%;background:linear-gradient(90deg,#a8261c,var(--gold));transition:width .9s linear}
-pre{font:11px/1.35 ui-monospace,Menlo,Consolas,monospace;opacity:.8;white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
-details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-marker{display:none}
+.win{max-width:560px;height:100%;margin:auto;display:flex;flex-direction:column;background:rgba(18,18,23,.94);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.tbar{display:flex;align-items:center;gap:7px;padding:11px 14px;background:var(--bar);border-bottom:1px solid var(--line);color:var(--gry);font-size:12px}
+.tbar i{width:11px;height:11px;border-radius:50%;flex:none}.tbar span{flex:1;text-align:center;padding-right:47px}
+.body{flex:1;overflow:auto;padding:12px 12px 30px}
+.w{display:flex;flex-direction:column;gap:14px}
+.sbar{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bar);border-top:1px solid var(--line);font-size:12px}
+.sbar b{color:var(--grn)}.sbar.busy b{color:var(--gold)}
+.sbar b::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:currentColor;margin-right:8px}
+.prompt{font-size:14px}
+.card{background:rgba(0,0,0,.45);border:1px solid var(--line);border-radius:8px;padding:13px}
+.card.sel{border:1.5px solid var(--grn);padding:12.5px}
+.card>b{display:block;font-size:15px;margin-bottom:6px}
+.cap{font-size:12px;font-weight:700;color:var(--grn)}.cap::before{content:"> "}
+.big{font-size:34px;font-weight:700;color:var(--gold)}.row{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.s{font-size:11.5px;color:var(--gry)}.red{color:var(--red)}.grn{color:var(--grn)}.gry{color:var(--gry)}.blu{color:var(--blu)}.dim{color:var(--dim)}.gold{color:var(--gold)}
+a,.lnk{display:inline-block;background:none;border:none;color:var(--gold);font:inherit;font-size:13px;padding:5px 0;cursor:pointer;text-align:left;text-decoration:none}
+.lnk.red{color:var(--red)}
+.btn{width:100%;border:1.5px solid var(--grn);border-radius:8px;padding:13px;font:inherit;font-size:16px;font-weight:700;color:var(--grn);background:rgba(0,0,0,.5);cursor:pointer}
+.btn::before{content:"[ "}.btn::after{content:" ]"}
+.btn.dan{border-color:var(--red);color:var(--red)}.btn:disabled{opacity:.5}
+input{width:100%;background:rgba(0,0,0,.55);color:#fff;border:1px solid var(--line);border-radius:6px;padding:10px;font:inherit;font-size:13px;margin-top:6px;outline:none}
+input:focus{border-color:var(--grn)}
+label{display:block;font-size:12px;color:var(--gry);margin-top:12px}
+.pb{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;margin:8px 0 4px}
+pre{font:inherit;font-size:11px;line-height:1.35;color:var(--gry);white-space:pre-wrap;word-break:break-all;margin:8px 0 0}
+.ban{font-size:8px;font-weight:700;line-height:1;color:var(--rose);white-space:pre;word-break:normal;display:inline-block;text-align:left;margin:0}
+.foot{text-align:center;padding-top:12px;overflow:hidden}.foot div{font-size:10px;color:var(--dim);margin-top:6px}
+details>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center}details>summary::-webkit-details-marker{display:none}
+details>summary::after{content:"+";color:var(--gold);font-weight:700}details[open]>summary::after{content:"-"}
 #chat{position:fixed;inset:0;z-index:20;background:#1a1a1a;display:none}
 #chat iframe{width:100%;height:100%;border:0}
 #x{position:absolute;top:max(10px,env(safe-area-inset-top));left:10px;z-index:21;width:40px;height:40px;border-radius:20px;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:22px;cursor:pointer}
 </style></head><body>
 <div id="bg"></div>
 <video id="sp" src="splash.mp4" playsinline preload="auto"></video>
-<div id="ui"><div class="w">
+<div id="ui"><div class="win">
+<div class="tbar"><i style="background:var(--red)"></i><i style="background:var(--gold)"></i><i style="background:var(--grn)"></i><span>satanic — python3</span></div>
+<div class="body"><div class="w">
+ <div class="prompt"><span class="grn">root@satanic</span><span class="gry">:</span><span class="blu">~</span><span class="gry">$ </span>./start.sh</div>
  <div class="card">
   <div class="cap">RUNPOD-GUTHABEN</div>
   <div class="row"><div class="big" id="bal">–</div><div class="s" id="spend"></div></div>
   <div class="s red" id="low" style="display:none">Guthaben niedrig, bitte aufladen.</div>
-  <a href="https://console.runpod.io/user/billing" target="_blank" rel="noopener" onclick="return ext(this.href)">＋ Guthaben aufladen</a>
+  <a href="https://console.runpod.io/user/billing" target="_blank" rel="noopener" onclick="return ext(this.href)">[+] Guthaben aufladen</a>
  </div>
  <div id="startView">
-  <div class="cap" style="margin-bottom:10px">STARTART WÄHLEN</div>
-  <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>◉ On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
-  <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:12px"><b>○ Network Volume</b><div class="s" id="volText"></div></div>
-  <div class="card" id="volCard" style="display:none;margin-top:12px"><div class="s" id="volInfo"></div>
-   <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">Volume löschen</button>
-   <div id="volSize"><label>Größe (GB): <input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
-  <button class="btn" id="go" style="margin-top:16px" onclick="start()">Starten</button>
+  <div class="cap" style="margin-bottom:14px">STARTART WÄHLEN</div>
+  <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>(*) On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
+  <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:14px"><b>( ) Network Volume</b><div class="s" id="volText"></div></div>
+  <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
+   <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
+   <div id="volSize"><label style="margin-top:0">Größe (GB)<input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
+  <button class="btn" id="go" style="margin-top:14px" onclick="start()">Starten</button>
  </div>
  <div id="runView" style="display:none">
   <div class="card">
-   <div class="row"><b style="font-size:20px" id="ttl"></b><span class="s" id="info"></span></div>
-   <div class="bar"><i id="pbar" style="width:0%"></i></div>
-   <div class="row s"><span id="pt">0 %</span><span id="eta"></span></div>
+   <div class="row"><b style="font-size:16px" id="ttl"></b><span class="s" id="info"></span></div>
+   <div class="pb" id="pbar"></div>
+   <div class="s" id="eta"></div>
    <div class="s" id="step" style="margin-top:6px"></div><pre id="log"></pre>
   </div>
-  <button class="btn" id="openChat" style="display:none;margin-top:16px" onclick="openChat()">Chat öffnen</button>
-  <button class="btn dan" style="margin-top:12px" onclick="stopPod()">Beenden (Terminate)</button>
+  <button class="btn" id="openChat" style="display:none;margin-top:14px" onclick="openChat()">Chat öffnen</button>
+  <button class="btn dan" style="margin-top:14px" onclick="stopPod()">Beenden (Terminate)</button>
  </div>
  <div class="s" id="msg" style="white-space:pre-wrap"></div>
  <details class="card" id="set"><summary><span class="cap">EINSTELLUNGEN</span></summary>
-  <details style="margin-top:10px"><summary class="s" style="color:var(--gold)">API-Keys erstellen</summary>
-   <div class="s" style="margin-top:8px">RunPod: Konto anlegen, Guthaben aufladen, dann unter Settings einen API-Key erstellen (Rechte: Lesen und Schreiben, inklusive GraphQL). Er beginnt mit rpa_.<br><a href="https://console.runpod.io/user/settings" target="_blank" rel="noopener" onclick="return ext(this.href)">RunPod öffnen</a></div>
-   <div class="s" style="margin-top:8px">Hugging Face: Konto anlegen, dann unter Settings → Access Tokens ein Token mit Leserechten (Read) erstellen. Es beginnt mit hf_.<br><a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" onclick="return ext(this.href)">Hugging Face öffnen</a></div>
-   <div class="s" style="margin-top:8px;opacity:.7">Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im lokalen Speicher dieser App.</div>
+  <details style="margin-top:10px"><summary class="gold">API-Keys erstellen</summary>
+   <div class="s" style="margin-top:8px">RunPod: Konto anlegen, Guthaben aufladen, dann im Bereich Settings oder Credentials einen API-Key erstellen (Rechte: Lesen und Schreiben). Der Key beginnt mit rpa_.<br><a href="https://console.runpod.io/user/settings" target="_blank" rel="noopener" onclick="return ext(this.href)">[&gt;] RunPod öffnen</a></div>
+   <div class="s" style="margin-top:8px">Hugging Face: Konto anlegen, dann unter Settings → Access Tokens ein Token mit Leserechten (Read) erstellen. Es beginnt mit hf_. Damit lädt der Pod die Modelle.<br><a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener" onclick="return ext(this.href)">[&gt;] Hugging Face öffnen</a></div>
+   <div class="s" style="margin-top:8px">Beide Keys nie weitergeben oder im Chat posten. Sie liegen nur im lokalen Speicher dieser App.</div>
   </details>
-  <label>Lizenz-Key<input id="licenseKey" type="password" autocomplete="off" placeholder="satanic-xxxx"></label>
-  <div id="licMsg" style="font-size:11px;margin:4px 0 8px;opacity:.8"></div>
-  <button id="licBtn" style="width:100%;margin-bottom:10px;padding:8px;background:rgba(224,176,61,.15);border:1px solid rgba(224,176,61,.4);color:#e0b03d;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px">Lizenz prüfen</button>
-  <label>RunPod API-Key<input id="apiKey" type="password" autocomplete="off"></label>
+  <label>Lizenz-Key<input id="licenseKey" type="password" autocomplete="off" placeholder="SATANIC-XXXX-XXXX-XXXX-XXXX"></label>
+  <div id="licMsg" style="font-size:11px;margin-top:6px"></div>
+  <button id="licBtn" class="lnk" style="font-size:12px">Lizenz prüfen</button>
+  <label style="margin-top:6px">RunPod API-Key<input id="apiKey" type="password" autocomplete="off"></label>
   <label>Vast.ai API-Key (Ersatz, optional)<input id="vastKey" type="password" autocomplete="off"></label>
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
   <label>Max. Preis ($/h, 0 = aus)<input id="maxPrice" type="number" step="0.05" min="0" max="3"></label>
@@ -79,6 +95,13 @@ details>summary{cursor:pointer;list-style:none}details>summary::-webkit-details-
   <label>Rechenzentrum (nur neues Volume)<input id="dc" autocapitalize="characters" autocorrect="off"></label>
   <label>Docker-Image<input id="image" autocapitalize="none" autocorrect="off"></label>
  </details>
+ <div class="foot"><pre class="ban"> ███████  █████  ████████  █████  ███    ██ ██  ██████
+ ██      ██   ██    ██    ██   ██ ████   ██ ██ ██     
+ ███████ ███████    ██    ███████ ██ ██  ██ ██ ██     
+      ██ ██   ██    ██    ██   ██ ██  ██ ██ ██ ██     
+ ███████ ██   ██    ██    ██   ██ ██   ████ ██  ██████</pre><div>uncensored ai · runpod</div></div>
+</div></div>
+<div class="sbar" id="sbar"><b id="st">kein pod</b><span class="gold" id="rate">$0.00/h</span></div>
 </div></div>
 <div id="chat"><button id="x" onclick="closeChat()">✕</button><iframe id="cf" allow="clipboard-write; camera; microphone"></iframe></div>
 <script src="setup.js"></script>
@@ -295,12 +318,13 @@ function draw(){
   $("low").style.display=(S.bal!=null&&S.bal<2)?"":"none";
   $("startView").style.display=none?"":"none";$("runView").style.display=none?"none":"";
   $("m_demand").className="card"+(mode==="demand"?" sel":"");$("m_volume").className="card"+(mode==="volume"?" sel":"");
-  $("m_demand").firstChild.textContent=(mode==="demand"?"◉ ":"○ ")+"On Demand";$("m_volume").firstChild.textContent=(mode==="volume"?"◉ ":"○ ")+"Network Volume";
+  const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");
   volTxt();$("volCard").style.display=mode==="volume"?"":"none";
   $("volInfo").textContent=S.volId?"Vorhandenes Volume: "+S.volInfo:"";$("delVol").style.display=S.volId?"":"none";$("volSize").style.display=S.volId?"none":"";
   $("go").disabled=S.busy;$("go").textContent=S.busy?"Starte…":"Starten";
   $("ttl").textContent=TT[S.phase];$("ttl").className=S.phase==="ready"?"grn":"";$("info").textContent=S.info;
-  $("pbar").style.width=S.shown+"%";$("pt").textContent=Math.floor(S.shown)+" %";$("eta").textContent=S.eta;
+  const pf=Math.round(Math.min(Math.max(S.shown,0),100)/100*24);$("pbar").innerHTML='<span class="gry">[</span><span class="red">'+"#".repeat(pf)+'</span><span class="dim">'+"-".repeat(24-pf)+'</span><span class="gry">] </span><span class="gold">'+Math.floor(S.shown)+'%</span>';$("eta").textContent=S.eta;
+  $("st").textContent=TT[S.phase].toLowerCase();$("sbar").className="sbar"+(none||S.phase==="ready"?"":" busy");$("rate").textContent="$"+Number(S.spend).toFixed(2)+"/h";
   $("step").textContent=S.step;$("log").textContent=S.log.join("\n");
   $("openChat").style.display=(licOK&&S.chatURL&&(S.phase==="loading"||S.phase==="ready"))?"":"none";
 }

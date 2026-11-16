@@ -1,7 +1,7 @@
 {
   "name": "kistart",
   "version": "1.0.0",
-  "description": "KI-Start",
+  "description": "Satanic",
   "author": "KI-Start",
   "main": "main.js",
   "private": true,
@@ -18,7 +18,7 @@
   },
   "build": {
     "appId": "com.kistart.app",
-    "productName": "KI-Start",
+    "productName": "Satanic",
     "files": ["main.js", "icon.png", "www/**/*"],
     "icon": "icon.png",
     "win": { "target": "portable", "icon": "icon.png", "artifactName": "KI-Start.exe" },
