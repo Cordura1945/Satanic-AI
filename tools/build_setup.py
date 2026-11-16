@@ -192,13 +192,20 @@ def upload():
     api = "https://api.cloudflare.com/client/v4"
 
     def call(method, path, body=None):
-        rq = urllib.request.Request(api + path, data=body, method=method, headers={"Authorization": "Bearer " + tok, "Content-Type": "application/octet-stream"})
+        hd = {"Authorization": "Bearer " + tok}
+        if body is not None: hd["Content-Type"] = "application/octet-stream"
+        rq = urllib.request.Request(api + path, data=body, method=method, headers=hd)
         try:
             return urllib.request.urlopen(rq, timeout=60).read()
         except urllib.error.HTTPError as e:
             raise SystemExit(f"FEHLER: Cloudflare {method} {path.split('/storage')[-1]}: HTTP {e.code} {e.read()[:300].decode('utf-8', 'replace')}")
 
-    acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID") or json.loads(call("GET", "/accounts"))["result"][0]["id"]
+    acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if not acc:
+        try:
+            acc = json.loads(call("GET", "/accounts"))["result"][0]["id"]
+        except (SystemExit, LookupError):
+            acc = json.loads(call("GET", "/memberships"))["result"][0]["account"]["id"]
     data = read(FULL)
     path = f"/accounts/{acc}/storage/kv/namespaces/{KV_NAMESPACE}/values/setup:{setup_name()}"
     call("PUT", path, data)
