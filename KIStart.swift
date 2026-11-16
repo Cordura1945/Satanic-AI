@@ -513,7 +513,8 @@ final class Model: ObservableObject {
             await startVast(b64: b64, errs: errs)
             return
         }
-        message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
+        let extra = useDC.map { "Im Rechenzentrum \($0) ist gerade keine passende GPU frei. Später erneut versuchen, oder auf On Demand wechseln, oder das Volume löschen und ein anderes Rechenzentrum eintragen.\n" } ?? ""
+        message = extra + "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
     }
 
     func startVast(b64: String, errs prev: [String]) async {
