@@ -506,7 +506,7 @@ final class Model: ObservableObject {
                         _ = try? await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
                         errs.append("\(entry): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
                         if dev {
-                            message = "Dev-Server: Die günstigste freie GPU (\(entry)) kostet $\(String(format: "%.2f", c))/h und liegt über deinem Limit von $\(String(format: "%.2f", limit))/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen."
+                            message = "Dev-Server: Die günstigste freie GPU (\(entry)) kostet $\(String(format: "%.2f", c))/h und liegt über deinem Limit von $\(String(format: "%.2f", limit))/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen." + (errs.count > 1 ? "\n\nGünstigere Varianten, nicht bekommen:\n" + errs.dropLast().joined(separator: "\n") : "")
                             return
                         }
                         continue

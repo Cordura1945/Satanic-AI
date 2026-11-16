@@ -297,7 +297,7 @@ async function start(){
         const p=d.podFindAndDeployOnDemand;
         if(p&&p.id){
           const c=p.costPerHr||0;
-          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(dev){msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`);return}continue}
+          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(dev){msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`+(errs.length>1?"\n\nGünstigere Varianten, nicht bekommen:\n"+errs.slice(0,-1).join("\n"):""));return}continue}
           S.podId=p.id;LS.setItem("ks_gpuUsed",gp);msg("Pod erstellt: "+gp);await poll();return;
         }
         errs.push(gp+": "+(err||"keine Antwort"));
