@@ -13,6 +13,8 @@ targets:
         buildPhase: resources
       - path: splash.mp4
         buildPhase: resources
+      - path: devzone.mp4
+        buildPhase: resources
       - path: Assets.xcassets
     settings:
       base:

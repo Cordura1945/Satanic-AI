@@ -81,12 +81,13 @@ struct RunPod {
         return "\"\""
     }
 
-    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0) -> String {
+    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false) -> String {
         let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
-        let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}]"
+        let devEnv = dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : ""
+        let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}\(devEnv)]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
-        return "mutation{podFindAndDeployOnDemand(input:{\(vol)cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:\(disk),minVcpuCount:2,minMemoryInGb:15,gpuTypeId:\(q(gpu)),name:\"ki-chat\",imageName:\(q(image)),dockerArgs:\(q(cmd)),ports:\"8000/http\",env:\(env)}){id costPerHr machineId}}"
+        return "mutation{podFindAndDeployOnDemand(input:{\(vol)cloudType:ALL,gpuCount:\(gpuCount),volumeInGb:0,containerDiskInGb:\(disk),minVcpuCount:2,minMemoryInGb:15,gpuTypeId:\(q(gpu)),name:\"ki-chat\",imageName:\(q(image)),dockerArgs:\(q(cmd)),ports:\"8000/http\",env:\(env)}){id costPerHr machineId}}"
     }
 }
 
@@ -127,6 +128,9 @@ final class Model: ObservableObject {
     @Published var volInfo = ""
     @Published var volDC = ""
     @Published var maxPrice: Double { didSet { UserDefaults.standard.set(maxPrice, forKey: "maxPrice") } }
+    @Published var devMaxPrice: Double { didSet { UserDefaults.standard.set(devMaxPrice, forKey: "devMaxPrice") } }
+    // Dev-Server: zuerst zwei 48-GB-GPUs, sonst eine 80-GB-GPU. "2x " heisst zwei GPUs im Pod.
+    static let devGpus: [String] = ["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"]
 
     @Published var balance: Double? = nil
     @Published var spend: Double = 0
@@ -182,6 +186,7 @@ final class Model: ObservableObject {
         if !u.bool(forKey: "gpusV3") { u.set(gl, forKey: "gpus"); u.set(true, forKey: "gpusV3") }
         gpus = u.string(forKey: "gpus") ?? gl
         maxPrice = u.object(forKey: "maxPrice") as? Double ?? 0.60
+        devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 2.20
         mode = u.string(forKey: "mode") ?? "demand"
         volGB = u.object(forKey: "volGB") as? Int ?? 60
         dc = u.string(forKey: "dc") ?? "EU-RO-1"
@@ -484,15 +489,19 @@ final class Model: ObservableObject {
                 return
             }
         }
-        let list = gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        for g in (apiKey.isEmpty ? [] : list) {
-            message = "Versuche \(g)…"
+        let dev = mode == "dev"
+        let limit = dev ? devMaxPrice : maxPrice
+        let list: [String] = dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        for entry in (apiKey.isEmpty ? [] : list) {
+            let n = entry.hasPrefix("2x ") ? 2 : 1
+            let g = n == 2 ? String(entry.dropFirst(3)) : entry
+            message = "Versuche \(entry)…"
             do {
-                let m = RunPod.deployMutation(gpu: g, image: image, disk: disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop)
+                let m = RunPod.deployMutation(gpu: g, image: image, disk: dev ? max(disk, 80) : disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev)
                 let (d, err) = try await RunPod(key: apiKey).gql(m)
                 if let p = d["podFindAndDeployOnDemand"] as? [String: Any], let id = p["id"] as? String {
                     let c = (p["costPerHr"] as? NSNumber)?.doubleValue ?? 0
-                    if maxPrice > 0 && c > maxPrice {
+                    if limit > 0 && c > limit {
                         _ = try? await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
                         errs.append("\(g): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
                         continue
@@ -509,7 +518,7 @@ final class Model: ObservableObject {
                 errs.append("\(g): \(error.localizedDescription)")
             }
         }
-        if !vastKey.isEmpty {
+        if !vastKey.isEmpty && !dev {
             await startVast(b64: b64, errs: errs)
             return
         }
@@ -811,6 +820,31 @@ struct ContentView: View {
     @State private var videoOpacity = 1.0
     @State private var uiOpacity = 0.0
     @State private var introStarted = false
+    @State private var dzPlayer: AVPlayer? = nil
+    @State private var dzURL: URL? = nil
+    @State private var dzSeen = false
+
+    // Dev-Server: beim ersten Oeffnen des Chats laeuft das Intro "Satanic Dev Zone" (Tippen ueberspringt)
+    func openChat(_ u: URL) {
+        guard m.mode == "dev", !dzSeen, dzPlayer == nil, let v = Bundle.main.url(forResource: "devzone", withExtension: "mp4") else { web = WebLink(url: u); return }
+        dzSeen = true
+        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.duckOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        let p = AVPlayer(url: v)
+        dzURL = u
+        dzPlayer = p
+        NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: p.currentItem, queue: .main) { _ in finishDevIntro() }
+        p.play()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 11) { finishDevIntro() }
+    }
+
+    func finishDevIntro() {
+        guard let p = dzPlayer, let u = dzURL else { return }
+        p.pause()
+        dzPlayer = nil
+        dzURL = nil
+        web = WebLink(url: u)
+    }
 
     func startIntro() {
         guard !introStarted else { return }
@@ -901,6 +935,7 @@ struct ContentView: View {
                 SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
                 SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
                 Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
+                Stepper("Max. Preis Dev-Server: $\(String(format: "%.2f", m.devMaxPrice))/h", value: $m.devMaxPrice, in: 0...6, step: 0.05)
                 Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
                 Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
                 Stepper("Disk: \(m.disk) GB", value: $m.disk, in: 60...300, step: 10)
@@ -924,6 +959,8 @@ struct ContentView: View {
                          "Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.")
                 modeCard("volume", "Network Volume",
                          "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\((m.volId != nil && !m.volDC.isEmpty) ? m.volDC : m.dc)).")
+                modeCard("dev", "Dev-Server",
+                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ca. $1.20–2.20 pro Stunde, eigenes Preislimit in den Einstellungen.")
                 if m.mode == "volume" {
                     Card {
                         if m.volId != nil {
@@ -959,7 +996,7 @@ struct ContentView: View {
                     GoldButton(title: "Chat öffnen") {
                         Task {
                             await m.licenseGate()
-                            if m.licenseOK { web = WebLink(url: u) } else { m.message = m.licenseMsg }
+                            if m.licenseOK { openChat(u) } else { m.message = m.licenseMsg }
                         }
                     }
                 }
@@ -1037,6 +1074,14 @@ struct ContentView: View {
             if videoOpacity > 0.01 && uiOpacity < 0.5 {
                 Color.clear.contentShape(Rectangle()).ignoresSafeArea().onTapGesture { finishIntro() }
             }
+            if let p = dzPlayer {
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    PlayerView(player: p).ignoresSafeArea()
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { finishDevIntro() }
+            }
         }
         .preferredColorScheme(.dark)
         .tint(Theme.gold)
@@ -1070,6 +1115,9 @@ struct ContentView: View {
         }
         .onChange(of: scene) { s in
             if s == .active { m.startLoop(); hideKeyboard(); Task { await m.licenseGate() } } else if s == .background { m.stopLoop() }
+        }
+        .onChange(of: m.phase) { ph in
+            if ph == .none { dzSeen = false }
         }
         .onChange(of: m.licenseOK) { ok in
             if !ok { web = nil }

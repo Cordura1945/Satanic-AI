@@ -58,6 +58,13 @@ header .sub{display:none}
 <style id="skin">
 :root{--bg:#0a0a0d;--card:#14141b;--line:#2a2a34;--tx:#e8e8ee;--mut:#8a8a96;--ac:#e0564e;--code:#0e0e13}
 [data-theme=light]{--bg:#0a0a0d;--card:#14141b;--line:#2a2a34;--tx:#e8e8ee;--mut:#8a8a96;--code:#0e0e13}
+html.dz{--bg:#020603;--card:#06130a;--line:#17502a;--tx:#b9ffae;--mut:#3f9d3a;--ac:#39ff14;--code:#010401}
+html.dz,html.dz body,html.dz #boot{background:#020603}
+html.dz #fxbg{background:radial-gradient(60% 42% at 50% 15%,rgba(30,160,40,.3),transparent 70%)}
+html.dz header b,html.dz #boot .pwr{color:#39ff14;text-shadow:0 0 12px rgba(57,255,20,.6)}
+html.dz #boot .bn{color:#1f8f24;text-shadow:none}
+html.dz #go{color:#020603;border-color:#39ff14;box-shadow:0 0 12px rgba(57,255,20,.45)}
+html.dz .b,html.dz header button{background:#06130a}html.dz #th,html.dz .tool{color:#39ff14}
 html,body{background:#0a0a0d}
 #app{background:transparent;position:relative;z-index:1}
 #fxbg{position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -206,7 +213,8 @@ function setTheme(t,save){document.documentElement.dataset.theme=t;$('#th').text
 setTheme(localStorage.getItem('theme')||'dark',false);
 $('#th').onclick=()=>setTheme(document.documentElement.dataset.theme==='light'?'dark':'light',true);
 fetch('/api/prefs').then(r=>r.json()).then(p=>{if(p&&p.theme)setTheme(p.theme,false)}).catch(()=>{});
-const GREETING='Hi! Ich bin Satanic, deine unzensierte KI. Was kann ich heute für dich tun? 😈';
+const DZ=document.documentElement.classList.contains('dz');if(DZ)document.querySelector('header b').textContent='satanic dev';
+const GREETING=DZ?'Willkommen in der Satanic Dev Zone. Was bauen wir heute? 😈':'Hi! Ich bin Satanic, deine unzensierte KI. Was kann ich heute für dich tun? 😈';
 function spkText(t){return t.replace(/```[\s\S]*?```/g,' (Code-Block) ').replace(/[*`#_>]/g,'').replace(/\[(Erzeugte|Erstellte)[^\]]*\]/g,'')}
 function speak(t){if(!window.speechSynthesis)return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(spkText(t));u.lang='de-DE';speechSynthesis.speak(u)}
 function render(){setTimeout(ctxUpd,0);
@@ -221,7 +229,7 @@ function render(){setTimeout(ctxUpd,0);
     if(m.role==='assistant'&&m.images)m.images.forEach(x=>d.appendChild(imgTag(x)));
     if(m.role==='assistant'&&m.files)m.files.forEach(f=>d.appendChild(fileTag(f)));
   }scroll()}
-async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
+async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(DZ?'DEV ✓':s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
 status();setInterval(status,15000);
 
 function loadImg(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
@@ -301,6 +309,7 @@ $('#dsave').onclick=async()=>{const m=$('#dmsg'),k=$('#dkey').value;m.textConten
     const s=await devApi(b);devKey=k;devSet=true;devOpenOk=true;try{localStorage.setItem('devkey',k)}catch(e){}$('#dtok').value='';devOn(true);
     m.textContent='✓ '+(s.note||'Gespeichert')+'\nDev-Modus ist eingeschaltet.'}
   catch(e){m.textContent='Fehler: '+e.message}};
+if(DZ){if(devKey)devOn(true);else setTimeout(devOpen,1200)}
 $('#odev').onchange=()=>{if($('#odev').checked&&!devKey){$('#odev').checked=false;devOpen();return}devOn($('#odev').checked)};
 optMark();
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
@@ -325,7 +334,7 @@ function estTok(){let c=700;const fast=$('#mdl').value==='fast';let dl=fast?1800
   const withDocs=hist.filter(m=>m.role==='user'&&m.docs&&m.docs.length).slice(-2).reverse();
   withDocs.forEach(m=>m.docs.forEach(d=>{const n=Math.max(0,Math.min(d.chars||0,per,dl));dl-=n;c+=n/3}));
   for(const m of payload()){c+=((m.text||'').length)/3+8;(m.images||[]).forEach(i=>{if(i.thumb)c+=700})}return c}
-function ctxLimit(){const dv=$('#odev').checked,b=$('#mdl').value==='fast'?(dv?6000:12500):(dv?13000:26000);return $('#othk').checked?Math.round(b*0.78):b}
+function ctxLimit(){const dv=$('#odev').checked,b=$('#mdl').value==='fast'?(dv?6000:12500):(dv?13000:26000)*(DZ?2:1);return $('#othk').checked?Math.round(b*0.78):b}
 function ctxUpd(){try{const u=estTok(),l=ctxLimit(),p=Math.max(0,Math.min(1,u/l)),c=2*Math.PI*9,a=$('#ctxa');
   a.setAttribute('stroke-dashoffset',(c*(1-p)).toFixed(2));a.setAttribute('stroke',p<.6?'#3fb950':p<.85?'#d29922':'#e0564e');$('#ctxp').textContent=Math.round(p*100)+'%'}catch(e){}}
 $('#ctx').onclick=()=>{const u=Math.round(estTok()),l=ctxLimit();const d=el('m a','Chat-Füllstand: ca. '+u.toLocaleString('de-DE')+' von '+l.toLocaleString('de-DE')+' Tokens ('+Math.round(100*u/l)+' %). Bei 100 % fasst Satanic den Chat zusammen und macht automatisch in einem neuen Chat weiter. Im Dev-Modus ist die Grenze niedriger, weil die Werkzeuge Platz brauchen.');scroll();setTimeout(()=>d.remove(),7000)};

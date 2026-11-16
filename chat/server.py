@@ -2135,6 +2135,7 @@ class H(BaseHTTPRequestHandler):
         self._send(404, {"error": "nicht gefunden"})
 
 INDEX = open(os.path.join(HERE, "index.html"), "rb").read()
+if os.environ.get("DEV_SERVER") == "1": INDEX = INDEX.replace(b'<html lang="de">', b'<html lang="de" class="dz">', 1)
 if __name__ == "__main__":
     seal_probe()
     threading.Thread(target=idle_watch, daemon=True).start()

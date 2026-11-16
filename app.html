@@ -40,12 +40,15 @@ pre{font:inherit;font-size:11px;line-height:1.35;color:var(--gry);white-space:pr
 .foot{text-align:center;padding-top:12px;overflow:hidden}.foot div{font-size:10px;color:var(--dim);margin-top:6px}
 details>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center}details>summary::-webkit-details-marker{display:none}
 details>summary::after{content:"+";color:var(--gold);font-weight:700}details[open]>summary::after{content:"-"}
+#dz{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;z-index:30;display:none}
+@media (min-aspect-ratio:3/4){#dz{object-fit:contain}}
 #chat{position:fixed;inset:0;z-index:20;background:#1a1a1a;display:none}
 #chat iframe{width:100%;height:100%;border:0}
 #x{position:absolute;top:max(10px,env(safe-area-inset-top));left:10px;z-index:21;width:40px;height:40px;border-radius:20px;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:22px;cursor:pointer}
 </style></head><body>
 <div id="bg"></div>
 <video id="sp" src="splash.mp4" playsinline preload="auto"></video>
+<video id="dz" src="devzone.mp4" playsinline preload="none"></video>
 <div id="ui"><div class="win">
 <div class="tbar"><i style="background:var(--red)"></i><i style="background:var(--gold)"></i><i style="background:var(--grn)"></i><span>satanic — python3</span></div>
 <div class="body"><div class="w">
@@ -60,6 +63,7 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <div class="cap" style="margin-bottom:14px">STARTART WÄHLEN</div>
   <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>(*) On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
   <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:14px"><b>( ) Network Volume</b><div class="s" id="volText"></div></div>
+  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ca. $1.20–2.20 pro Stunde, eigenes Preislimit in den Einstellungen.</div></div>
   <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
    <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
    <div id="volSize"><label style="margin-top:0">Größe (GB)<input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
@@ -89,6 +93,7 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <label>Vast.ai API-Key (Ersatz, optional)<input id="vastKey" type="password" autocomplete="off"></label>
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
   <label>Max. Preis ($/h, 0 = aus)<input id="maxPrice" type="number" step="0.05" min="0" max="3"></label>
+  <label>Max. Preis Dev-Server ($/h, 0 = aus)<input id="devMaxPrice" type="number" step="0.05" min="0" max="6"></label>
   <label>Auto-Beenden (Stunden, 0 = aus)<input id="autoStop" type="number" min="0" max="48"></label>
   <label>Leerlauf-Abschaltung (Minuten, 0 = aus)<input id="idleStop" type="number" min="0" max="240" step="5"></label>
   <label>Disk (GB)<input id="disk" type="number" min="60" max="300" step="10"></label>
@@ -108,9 +113,10 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
 <script>
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
-const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
+const GLD=["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"];var dzSeen=false;
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"2.2",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","vastKey","hfToken","maxPrice","autoStop","idleStop","disk","dc","volGB","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","autoStop","idleStop","disk","dc","volGB","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
@@ -128,11 +134,11 @@ async function rest(method,path,body){
   o._raw=t.slice(0,300);return {code:r.status,obj:o};
 }
 const q=JSON.stringify;
-function deploy(gpu,vol,dcid,b64){
+function deploy(gpu,vol,dcid,b64,n,dev){
   const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
-  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}]`;
+  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}${dev?`,{key:${q("DEV_SERVER")},value:${q("1")}}`:""}]`;
   let v="";if(vol){v=`networkVolumeId:${q(vol)},`;if(dcid)v+=`dataCenterId:${q(dcid)},`}
-  return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:1,volumeInGb:0,containerDiskInGb:${parseInt(g("disk"))||100},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
+  return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:${n||1},volumeInGb:0,containerDiskInGb:${Math.max(parseInt(g("disk"))||100,dev?80:0)},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
 /* ---- Zustand ---- */
 let S={prov:"rp",phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
@@ -153,7 +159,7 @@ async function vast(method,path,body){
   const r=await fetch(VAPI+path,{method,headers:{"Content-Type":"application/json","Authorization":"Bearer "+g("vastKey")},body:body?JSON.stringify(body):undefined});
   const t=await r.text();let o={};try{o=JSON.parse(t)}catch(e){}return {code:r.status,obj:o}
 }
-function idle(){Object.assign(S,{podId:null,phase:"none",info:"",step:"",log:[],chatURL:null,pct:0,shown:0,eta:"",upMin:0});draw()}
+function idle(){dzSeen=false;Object.assign(S,{podId:null,phase:"none",info:"",step:"",log:[],chatURL:null,pct:0,shown:0,eta:"",upMin:0});draw()}
 async function poll(){
   if(!g("apiKey")&&!g("vastKey")){msg("Unten im Bereich Einstellungen den RunPod- oder Vast.ai-Key eintragen.");return}
   let found=false;
@@ -278,11 +284,12 @@ async function start(){
         else{msg(`Volume konnte nicht erstellt werden (HTTP ${code}): ${obj.message||obj.error||obj._raw||"keine Details"}`);return}
       }
     }
-    const errs=[],maxP=parseFloat(g("maxPrice"))||0;
-    for(const gp of (g("apiKey")?g("gpus").split("\n"):[]).map(x=>x.trim()).filter(Boolean)){
-      msg("Versuche "+gp+"…");
+    const dev=g("mode")==="dev",errs=[],maxP=parseFloat(g(dev?"devMaxPrice":"maxPrice"))||0;
+    for(const en of (g("apiKey")?(dev?GLD:g("gpus").split("\n")):[]).map(x=>x.trim()).filter(Boolean)){
+      const n=en.startsWith("2x ")?2:1,gp=n===2?en.slice(3):en;
+      msg("Versuche "+en+"…");
       try{
-        const {data:d,err}=await gql(deploy(gp,vol,dcid,window.SETUP_B64));
+        const {data:d,err}=await gql(deploy(gp,vol,dcid,window.SETUP_B64,n,dev));
         const p=d.podFindAndDeployOnDemand;
         if(p&&p.id){
           const c=p.costPerHr||0;
@@ -292,7 +299,7 @@ async function start(){
         errs.push(gp+": "+(err||"keine Antwort"));
       }catch(e){errs.push(gp+": "+e.message)}
     }
-    if(g("vastKey")){await startVast(window.SETUP_B64,errs);return}
+    if(g("vastKey")&&!dev){await startVast(window.SETUP_B64,errs);return}
     msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
@@ -317,8 +324,8 @@ function draw(){
   $("spend").textContent="Verbrauch: $"+Number(S.spend).toFixed(2)+"/h";
   $("low").style.display=(S.bal!=null&&S.bal<2)?"":"none";
   $("startView").style.display=none?"":"none";$("runView").style.display=none?"none":"";
-  $("m_demand").className="card"+(mode==="demand"?" sel":"");$("m_volume").className="card"+(mode==="volume"?" sel":"");
-  const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");
+  $("m_demand").className="card"+(mode==="demand"?" sel":"");$("m_volume").className="card"+(mode==="volume"?" sel":"");$("m_dev").className="card"+(mode==="dev"?" sel":"");
+  const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");rb("dev","Dev-Server");
   volTxt();$("volCard").style.display=mode==="volume"?"":"none";
   $("volInfo").textContent=S.volId?"Vorhandenes Volume: "+S.volInfo:"";$("delVol").style.display=S.volId?"":"none";$("volSize").style.display=S.volId?"none":"";
   $("go").disabled=S.busy;$("go").textContent=S.busy?"Starte…":"Starten";
@@ -328,7 +335,13 @@ function draw(){
   $("step").textContent=S.step;$("log").textContent=S.log.join("\n");
   $("openChat").style.display=(licOK&&S.chatURL&&(S.phase==="loading"||S.phase==="ready"))?"":"none";
 }
-async function openChat(){if(!await licGate()){msg($("licMsg").textContent);return}$("cf").src=S.chatURL;$("chat").style.display="block"}
+async function openChat(){if(!await licGate()){msg($("licMsg").textContent);return}
+  const go=()=>{$("cf").src=S.chatURL;$("chat").style.display="block"},v=$("dz");
+  if(g("mode")!=="dev"||dzSeen||!v){go();return}
+  /* Dev-Server: beim ersten Oeffnen laeuft das Intro "Satanic Dev Zone" (Tippen ueberspringt) */
+  dzSeen=true;let f=false;const end=()=>{if(f)return;f=true;try{v.pause()}catch(e){}v.style.display="none";go()};
+  v.style.display="block";v.onended=end;v.onerror=end;v.onclick=end;setTimeout(end,11000);
+  try{v.currentTime=0}catch(e){}v.play().catch(()=>{v.muted=true;v.play().catch(end)})}
 function closeChat(){$("chat").style.display="none";$("cf").src="about:blank"}
 /* ---- Loop ---- */
 let pt=null;

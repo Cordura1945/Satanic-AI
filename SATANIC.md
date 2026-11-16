@@ -12,6 +12,8 @@
 - .github/workflows/build.yml: baut ipa, apk und exe und legt sie im Release latest-<branch> ab.
 - license/: Lizenz-Server (worker.js), seine Einstellungen und config.json mit der Server-Adresse. Test: "node tools/license_test.mjs".
 - web/: alter Stand, wird nicht gebaut. Nicht aendern.
+- Dev-Server: eigene Startart in beiden Starter-Apps (mode "dev"). Der Pod bekommt DEV_SERVER=1. Dann laedt setup_template.sh nur das Programmier-Modell (kein Bildteil), chat/server.py setzt die Klasse "dz" ans html-Element, und chat/index.html zeigt damit das gruene Aussehen (Regeln "html.dz ...") und oeffnet den Dev-Dialog von selbst.
+- devzone.mp4: Intro "Satanic Dev Zone". Laeuft in den Starter-Apps beim ersten Oeffnen des Chats auf dem Dev-Server.
 
 ## Regeln
 - Aenderungen am Chat (Verhalten, Werkzeuge, Oberflaeche): nur chat/server.py und chat/index.html.

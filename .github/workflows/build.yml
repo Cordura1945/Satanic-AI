@@ -106,7 +106,7 @@ jobs:
 
         cp app.html www/index.html
 
-        cp bg.jpg splash.mp4 www/
+        cp bg.jpg splash.mp4 devzone.mp4 www/
 
         echo "window.SETUP_B64=''$(gzip -9 -n -c setup_all.sh | base64 -w0)''" > www/setup.js
 
@@ -158,7 +158,7 @@ jobs:
 
         cp app.html www/index.html
 
-        cp bg.jpg splash.mp4 www/
+        cp bg.jpg splash.mp4 devzone.mp4 www/
 
         echo "window.SETUP_B64=''$(gzip -9 -n -c setup_all.sh | base64 -w0)''" > www/setup.js
 

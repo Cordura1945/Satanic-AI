@@ -28,7 +28,7 @@ def calc(text):
     if "Chat-App starten" in text: st = 6
     frac = 0.0
     if st == 2:
-        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / 37e9, 1.0)
+        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / (48.6e9 if os.environ.get("DEV_SERVER") == "1" else 37e9), 1.0)
     if st == 3:
         try:
             ms = re.findall(r"\[\s*(\d+)%\]", open("/tmp/build.log", errors="ignore").read())
@@ -58,6 +58,9 @@ fi
 
 echo "=== 1/5 ComfyUI installieren ==="
 cd /workspace || exit 1
+# Dev-Server (DEV_SERVER=1): ohne Bildteil, mit grossem Programmier-Modell
+DEV=0; [ "$DEV_SERVER" = "1" ] && DEV=1
+if [ "$DEV" = "0" ]; then
 [ -d ComfyUI ] || git clone https://github.com/comfyanonymous/ComfyUI
 cd ComfyUI || exit 1
 pip install -q -r requirements.txt
@@ -80,6 +83,11 @@ cat > "$WF/Image2Image.json" <<'EOF_I2I'
 @@EMBED:chat/Image2Image.json@@
 EOF_I2I
 ls -l "$WF"
+else
+pip install -q -U huggingface_hub
+pip install -q pypdf reportlab || true
+(apt-get update -qq; apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra) >/dev/null 2>&1 || true
+fi
 echo "--- Chat-App einrichten ---"
 mkdir -p /workspace/chatapp
 # Dev-Modus: Befehle der KI laufen als eigener Nutzer ohne Root-Rechte, nur im Projektordner
@@ -109,11 +117,14 @@ jobs = [
  ("Kim2091/UltraSharp", "4x-UltraSharp.safetensors", B+"upscale_models"),
  ("orcarouter/Qwen3.8-27B-Uncensored-GGUF", "Qwen3.8-27B-Uncensored-Q4_K_M.gguf", "/workspace/models/llm"),
 ]
+DEV = os.environ.get("DEV_SERVER") == "1"
+if DEV: jobs = [("bartowski/huihui-ai_Qwen3-Coder-Next-abliterated-GGUF", "huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf", "/workspace/models/llm")]
 for repo, f, dest in jobs:
     try:
         d(repo, f, local_dir=dest, token=tok); print("OK    ", f)
     except Exception as e:
         print("FEHLER", f, type(e).__name__, str(e)[:160])
+if DEV: raise SystemExit
 if os.path.exists(B+"vae/flux2-vae.safetensors"):
     print("OK     flux2-vae vorhanden")
 else:
@@ -138,7 +149,7 @@ except Exception as e:
     print("FEHLER mmproj", type(e).__name__, str(e)[:160])
 PY
 
-python3 - <<'PY2'
+[ "$DEV" = "1" ] || python3 - <<'PY2'
 import os
 from huggingface_hub import hf_hub_download as d, list_repo_files
 tok=os.environ.get("HF_TOKEN") or None
@@ -180,17 +191,17 @@ else
 fi
 
 echo "=== 4/5 ComfyUI starten (Port 8818) ==="
-cd /workspace/ComfyUI
-nohup python main.py --listen 0.0.0.0 --port 8818 > comfy.log 2>&1 &
+if [ "$DEV" = "0" ]; then cd /workspace/ComfyUI; nohup python main.py --listen 0.0.0.0 --port 8818 > comfy.log 2>&1 & fi
 
 echo "=== 5/5 LLM-Server starten (Port 8080) ==="
 M=/workspace/models/llm/Qwen3.8-27B-Uncensored-Q4_K_M.gguf
+CTX=32768; if [ "$DEV" = "1" ]; then M=/workspace/models/llm/huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf; CTX=65536; fi
 if [ "$LLM_OK" = "1" ] && [ -f "$M" ]; then
   cd /workspace
-  MMP=""; [ -f /workspace/models/llm/mmproj.gguf ] && MMP="--mmproj /workspace/models/llm/mmproj.gguf"
-  nohup ./llama.cpp/build/bin/llama-server -m "$M" $MMP -ngl 99 -c 32768 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --host 0.0.0.0 --port 8080 > /workspace/llm.log 2>&1 &
+  MMP=""; [ "$DEV" = "0" ] && [ -f /workspace/models/llm/mmproj.gguf ] && MMP="--mmproj /workspace/models/llm/mmproj.gguf"
+  nohup ./llama.cpp/build/bin/llama-server -m "$M" $MMP -ngl 99 -c $CTX -fa on --cache-type-k q8_0 --cache-type-v q8_0 --jinja --host 0.0.0.0 --port 8080 > /workspace/llm.log 2>&1 &
   F9=/workspace/models/llm/fast9b.gguf
-  if [ -f "$F9" ]; then nohup ./llama.cpp/build/bin/llama-server -m "$F9" -ngl 99 -c 16384 -fa on --jinja --host 0.0.0.0 --port 8081 > /workspace/llm_fast.log 2>&1 & fi
+  if [ "$DEV" = "0" ] && [ -f "$F9" ]; then nohup ./llama.cpp/build/bin/llama-server -m "$F9" -ngl 99 -c 16384 -fa on --jinja --host 0.0.0.0 --port 8081 > /workspace/llm_fast.log 2>&1 & fi
   echo "LLM startet (Laden dauert 1-2 Minuten, Log: tail -f /workspace/llm.log)"
 else
   echo "LLM nicht gestartet (Build oder Modell fehlt)."
