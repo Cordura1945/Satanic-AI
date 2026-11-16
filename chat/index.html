@@ -408,6 +408,7 @@ async function runAssistant(regenId,resumeJid){
         else if(ev.type==='tool'){unthk();const t=document.createElement('div');t.className='tool';t.textContent=ev.label||((ev.name==='edit_image'?'Bearbeite Bild: ':ev.name==='create_file'?'Erstelle Datei: ':'Erzeuge Bild: ')+ev.prompt);bub.appendChild(t)}
         else if(ev.type==='step'){const t=document.createElement('div');t.className='tool';t.style.color='#f08a7a';t.textContent='↳ '+ev.text;bub.appendChild(t)}
         else if(ev.type==='file'){a.files.push({id:ev.id,name:ev.name});bub.appendChild(fileTag(ev))}
+        else if(ev.type==='link'){const l=document.createElement('a');l.href=ev.url;l.target='_blank';l.rel='noopener';l.textContent='🔗 '+ev.name;l.style.cssText='display:block;margin-top:8px;padding:8px 12px;border:1px solid var(--line);border-radius:10px;color:var(--ac);text-decoration:none';bub.appendChild(l)}
         else if(ev.type==='image'){a.images.push(ev.id);bub.appendChild(imgTag(ev.id))}
         else if(ev.type==='error'){const t=document.createElement('div');t.className='tool';t.style.color='#f08a7a';t.textContent='Fehler: '+ev.text;bub.appendChild(t)}
         scroll()};

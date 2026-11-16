@@ -66,7 +66,7 @@ cd ComfyUI || exit 1
 pip install -q -r requirements.txt
 pip install -q -U huggingface_hub
 pip install -q pypdf reportlab || true
-(apt-get update -qq; apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra) >/dev/null 2>&1 || true
+(apt-get update -qq; apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra nodejs) >/dev/null 2>&1 || true
 cd custom_nodes
 [ -d ComfyUI-GGUF ] || git clone https://github.com/city96/ComfyUI-GGUF
 pip install -q -r ComfyUI-GGUF/requirements.txt
@@ -86,7 +86,7 @@ ls -l "$WF"
 else
 pip install -q -U huggingface_hub
 pip install -q pypdf reportlab || true
-(apt-get update -qq; apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra) >/dev/null 2>&1 || true
+(apt-get update -qq; apt-get install -y -qq fonts-dejavu-core fonts-dejavu-extra nodejs) >/dev/null 2>&1 || true
 fi
 echo "--- Chat-App einrichten ---"
 mkdir -p /workspace/chatapp
