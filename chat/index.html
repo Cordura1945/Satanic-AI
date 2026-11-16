@@ -58,13 +58,12 @@ header .sub{display:none}
 <style id="skin">
 :root{--bg:#0a0a0d;--card:#14141b;--line:#2a2a34;--tx:#e8e8ee;--mut:#8a8a96;--ac:#e0564e;--code:#0e0e13}
 [data-theme=light]{--bg:#0a0a0d;--card:#14141b;--line:#2a2a34;--tx:#e8e8ee;--mut:#8a8a96;--code:#0e0e13}
-html.dz{--bg:#020603;--card:#06130a;--line:#17502a;--tx:#b9ffae;--mut:#3f9d3a;--ac:#39ff14;--code:#010401}
-html.dz,html.dz body,html.dz #boot{background:#020603}
-html.dz #fxbg{background:radial-gradient(60% 42% at 50% 15%,rgba(30,160,40,.3),transparent 70%)}
-html.dz header b,html.dz #boot .pwr{color:#39ff14;text-shadow:0 0 12px rgba(57,255,20,.6)}
-html.dz #boot .bn{color:#1f8f24;text-shadow:none}
-html.dz #go{color:#020603;border-color:#39ff14;box-shadow:0 0 12px rgba(57,255,20,.45)}
-html.dz .b,html.dz header button{background:#06130a}html.dz #th,html.dz .tool{color:#39ff14}
+html.dz{--ac:#34c759}
+html.dz #boot{display:none}
+html.dz #fxbg{background:radial-gradient(60% 42% at 50% 15%,rgba(24,140,50,.32),rgba(8,40,14,.1) 55%,transparent 100%),radial-gradient(52% 32% at 50% 100%,rgba(20,110,40,.24),transparent 100%)}
+html.dz header b{white-space:nowrap;font-size:12px;letter-spacing:0;text-shadow:0 0 10px rgba(52,199,89,.4)}
+html.dz header .av{box-shadow:0 0 10px rgba(52,199,89,.4)}
+html.dz #go{background:#1f9a40;border-color:#34c759;box-shadow:0 0 12px rgba(52,199,89,.4)}
 html,body{background:#0a0a0d}
 #app{background:transparent;position:relative;z-index:1}
 #fxbg{position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -440,6 +439,7 @@ render();
 </script><script>
 (function(){
  var boot=document.getElementById('boot'); if(!boot) return;
+ if(document.documentElement.classList.contains('dz')){ if(boot.parentNode) boot.parentNode.removeChild(boot); return; }
  try{ if(sessionStorage.getItem('booted')==='1'){ if(boot.parentNode) boot.parentNode.removeChild(boot); return; } }catch(e){}
  var log=boot.querySelector('.log'); var started=false;
  function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}

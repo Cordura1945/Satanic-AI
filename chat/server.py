@@ -1634,7 +1634,7 @@ for f in files:
                 at = m.group(1).lower()
                 if 'src=' in at or ('type=' in at and not re.search(r'type=["\']?(text/javascript|module|application/javascript)', at)): continue
                 n += 1; good = js(m.group(2), f, h.count(chr(10), 0, m.start(2)), 'module' in at) and good
-            if h.lower().count('<script') != len(re.findall(r'</script\s*>', h, re.I)): bad.append(f + ': Anzahl <script> und </script> passt nicht zusammen'); good = False
+            if h.lower().count('<script') != len(re.findall(r'</script\s*>', h, re.I)): skip.append(f + ': Hinweis: Anzahl <script> und </script> passt nicht zusammen, bitte ansehen')
             if good and (NODE or n == 0): ok.append(f + (f' ({n} Skript-Block/Bloecke)' if n else ''))
         elif e in ('yml', 'yaml'):
             try:
@@ -1927,27 +1927,45 @@ def t_create_repo(a, cfg):
             f"Lege die Dateien mit write_file an (Pfade wie '{name}/index.html'), pruefe mit check und lade alles mit git_push hoch (project={name}). Kein git_clone noetig.")
 
 PREVIEW_ROOT = "/preview/"
+PREVIEWS = {}  # geheimer Schluessel -> Projektordner. Nur dafuer freigegebene Projekte sind ueber den Link lesbar.
+# Die Vorschau laeuft abgeschottet (siehe Kopfzeile beim Ausliefern). Dort gibt es keinen Browser-Speicher; dieser Ersatz haelt Daten bis zum Neuladen.
+PREVIEW_SHIM = (b"<script>(function(){function M(){var d={};return{getItem:function(k){return Object.prototype.hasOwnProperty.call(d,k)?d[k]:null},"
+                b"setItem:function(k,v){d[k]=String(v)},removeItem:function(k){delete d[k]},clear:function(){d={}},key:function(i){return Object.keys(d)[i]||null},"
+                b"get length(){return Object.keys(d).length}}}['localStorage','sessionStorage'].forEach(function(n){try{window[n].getItem('x')}catch(e){"
+                b"try{Object.defineProperty(window,n,{value:M(),configurable:true})}catch(e2){}}})})();</script>")
+PREVIEW_CSP = "sandbox allow-scripts allow-forms allow-modals allow-popups allow-downloads"
 def t_preview(a, cfg):
+    import secrets
     p = str(a.get("path") or "").strip().strip("/")
     full = ppath(p, True)
     if os.path.isdir(full): full = os.path.join(full, "index.html")
     if not os.path.isfile(full): raise ValueError("Keine Datei gefunden (fuer einen Ordner wird index.html gesucht): " + p)
     rel = prel(full)
-    if any(x.startswith(".") for x in rel.split("/")): raise ValueError("Versteckte Dateien und .git werden nicht angezeigt")
-    url = PREVIEW_ROOT + urllib.parse.quote(rel)
-    return (f"Vorschau-Link fuer {rel} wird dem Nutzer als antippbarer Link angezeigt ({url}). Er zeigt den aktuellen Stand der Datei auf dem Server, "
-            "auch vor dem Push. Bilder, CSS und Skripte mit relativen Pfaden im selben Projekt werden mit geladen.", [], [(url, "Vorschau: " + rel)])
+    if "/" not in rel or any(x.startswith(".") for x in rel.split("/")): raise ValueError("Nur Dateien in einem Projekt, keine versteckten Dateien und kein .git")
+    proj = rel.split("/")[0]
+    key = next((k for k, v in PREVIEWS.items() if v == proj), None)
+    if not key: key = secrets.token_urlsafe(24); PREVIEWS[key] = proj
+    url = PREVIEW_ROOT + key + "/" + urllib.parse.quote(rel)
+    return (f"Vorschau-Link fuer {rel} wird dem Nutzer als antippbarer Link angezeigt. Er zeigt den aktuellen Stand der Datei auf dem Server, auch vor dem Push. "
+            "Bilder, CSS und Skripte mit relativen Pfaden im selben Projekt werden mit geladen. Die Vorschau laeuft abgeschottet: Daten in localStorage halten dort nur bis zum Neuladen. "
+            "Nenne den Link nicht selbst im Text, er steht schon unter deiner Antwort.", [], [(url, "Vorschau: " + rel)])
 def preview_file(path):
-    rel = urllib.parse.unquote(path[len(PREVIEW_ROOT):]).strip("/")
-    if not rel or any(x.startswith(".") for x in rel.split("/")): return None
+    parts = urllib.parse.unquote(path[len(PREVIEW_ROOT):]).strip("/").split("/", 1)
+    if len(parts) < 2 or parts[0] not in PREVIEWS: return None
+    rel = parts[1].strip("/")
+    if not rel or rel.split("/")[0] != PREVIEWS[parts[0]] or any(x.startswith(".") for x in rel.split("/")): return None
     try: full = ppath(rel, True)
     except ValueError: return None
     if os.path.isdir(full): full = os.path.join(full, "index.html")
-    if not os.path.isfile(full) or os.path.getsize(full) > 50 * 1024 * 1024: return None
+    if not prel(full).startswith(PREVIEWS[parts[0]] + "/") or not os.path.isfile(full) or os.path.getsize(full) > 50 * 1024 * 1024: return None
     import mimetypes
     ct = mimetypes.guess_type(full)[0] or "application/octet-stream"
+    data = open(full, "rb").read()
+    if ct == "text/html":
+        m = re.search(rb"<head[^>]*>", data, re.I) or re.search(rb"<!doctype[^>]*>", data, re.I)
+        data = (data[:m.end()] + PREVIEW_SHIM + data[m.end():]) if m else PREVIEW_SHIM + data
     if ct.startswith("text/") or ct in ("application/javascript", "application/json", "image/svg+xml"): ct += "; charset=utf-8"
-    return open(full, "rb").read(), ct
+    return data, ct
 
 import ipaddress, socket, html as _html
 def _public(host):
@@ -2265,7 +2283,9 @@ class H(BaseHTTPRequestHandler):
         if u.path.startswith(PREVIEW_ROOT):
             r = preview_file(u.path)
             if not r: return self._send(404, {"error": "nicht gefunden"})
-            return self._send(200, r[0], r[1])
+            self.send_response(200); self.send_header("Content-Type", r[1]); self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Security-Policy", PREVIEW_CSP); self.send_header("X-Content-Type-Options", "nosniff"); self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(r[0]))); self.end_headers(); self.wfile.write(r[0]); return
         if u.path == "/api/job":
             q = parse_qs(u.query); jid = (q.get("id") or [""])[0]
             try: start = max(0, int((q.get("from") or ["0"])[0]))

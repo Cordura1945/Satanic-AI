@@ -66,7 +66,15 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <div class="cap" style="margin-bottom:14px">STARTART WÄHLEN</div>
   <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>(*) On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
   <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:14px"><b>( ) Network Volume</b><div class="s" id="volText"></div></div>
-  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.</div></div>
+  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Ohne Volume lädt jeder Start alles neu (ca. 15–30 Min), mit eigenem Dev-Volume nur der erste. Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.</div></div>
+  <div class="card" id="devCard" style="display:none;margin-top:14px">
+   <label style="margin-top:0;display:flex;gap:10px;align-items:center;color:#fff;font-weight:700;font-size:13px;cursor:pointer"><input type="checkbox" id="devVol" style="width:auto;margin:0;padding:0"> Network Volume für den Dev-Server</label>
+   <div class="s" id="devVolOff" style="margin-top:8px">Aus: On Demand, bei jedem Start wird alles neu geladen.</div>
+   <div id="devVolBox"><div class="s" id="devVolInfo" style="margin-top:8px"></div>
+    <button class="lnk red" id="delDevVol" onclick="delVol(true)" style="display:none">[x] Dev-Volume löschen</button>
+    <div id="devVolSize"><label>Größe (GB)<input id="devVolGB" type="number" min="55" max="200" step="5"></label><label>Rechenzentrum<input id="devDc" autocapitalize="characters" autocorrect="off"></label></div>
+    <div class="s" style="margin-top:8px">Eigenes Volume „ki-dev-vol“: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.</div></div>
+  </div>
   <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
    <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
    <div id="volSize"><label style="margin-top:0">Größe (GB)<input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
@@ -118,9 +126,9 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
 const GLD=["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"];var dzSeen=false;
-const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"1.25",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"1.25",devVol:"0",devVolGB:"60",devDc:"EU-RO-1",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","autoStop","idleStop","disk","dc","volGB","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","autoStop","idleStop","disk","dc","volGB","devVolGB","devDc","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
@@ -146,7 +154,7 @@ function deploy(gpu,vol,dcid,b64,n,dev){
   return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:${n||1},volumeInGb:0,containerDiskInGb:${Math.max(parseInt(g("disk"))||100,dev?80:0)},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
 /* ---- Zustand ---- */
-let S={prov:"rp",phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
+let S={prov:"rp",phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",devVolId:null,devVolInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
 const PB=[0,5,12,62,85,97,100],TM=[0,3,5,17,25,29,30],CAPB=[5,8,12,62,85,87,92,97,100];
 function tmin(p){for(let i=1;i<PB.length;i++)if(p<=PB[i]){const f=(p-PB[i-1])/(PB[i]-PB[i-1]);return TM[i-1]+f*(TM[i]-TM[i-1])}return 30}
 function tick(){
@@ -221,6 +229,8 @@ async function pollRP(){
     S.bal=me.clientBalance;S.spend=me.currentSpendPerHr||0;
     const v=(me.networkVolumes||[]).find(x=>x.name==="ki-chat-vol");
     if(v){S.volId=v.id;S.volInfo=`${v.size} GB · ${v.dataCenterId||"?"} · ca. $${(v.size*.07).toFixed(2)}/Monat`}else{S.volId=null;S.volInfo=""}
+    const dv=(me.networkVolumes||[]).find(x=>x.name==="ki-dev-vol");
+    if(dv){S.devVolId=dv.id;S.devVolInfo=`${dv.size} GB · ${dv.dataCenterId||"?"} · ca. $${(dv.size*.07).toFixed(2)}/Monat`}else{S.devVolId=null;S.devVolInfo=""}
     const pod=(me.pods||[]).find(p=>p.name==="ki-chat"&&p.desiredStatus==="RUNNING");
     if(!pod){idle();return false}
     S.prov="rp";S.podId=pod.id;
@@ -276,50 +286,51 @@ async function autoStart(){
   if(AUTO||S.busy)return;AUTO=true;SKIP={};let n=0;
   while(AUTO){
     n++;RETRY=false;autoTxt=n===1?"":"Autostart: Versuch "+n+" läuft…";draw();
-    await start();
+    await start(n%100!==1);
     if(S.podId||!RETRY)break;
     autoTxt="Autostart: Versuch "+n+" ohne passende GPU, suche weiter…";draw();await new Promise(r=>setTimeout(r,3000))
   }
   AUTO=false;autoTxt="";draw();
 }
 function goClick(){if(AUTO){AUTO=false;autoTxt="";draw()}else autoStart()}
-async function start(){
+async function start(skipLic){
   if(S.busy)return;
-  if(!await checkLicense()){msg("Lizenz ungültig – Start blockiert.");$("set").open=true;return}
+  if(skipLic!==true&&!await checkLicense()){msg("Lizenz ungültig – Start blockiert.");$("set").open=true;return}
   if((!g("apiKey")&&!g("vastKey"))||!g("hfToken")){msg("RunPod- oder Vast.ai-Key und Hugging-Face-Token eintragen.");$("set").open=true;return}
   if(!window.SETUP_B64){msg("setup_all.sh fehlt im App-Paket.");return}
   S.busy=true;draw();
   try{
     let vol=null,dcid=null;
-    if(g("mode")==="volume"&&g("apiKey")){
+    const dm=g("mode")==="dev",vName=dm?"ki-dev-vol":"ki-chat-vol",vDc=dm?String(g("devDc")).trim().toUpperCase():g("dc"),vGB=parseInt(g(dm?"devVolGB":"volGB"))||60;
+    if((g("mode")==="volume"||(dm&&g("devVol")==="1"))&&g("apiKey")){
       msg("Network Volume wird vorbereitet…");
       const {data:d0}=await gql("query{myself{networkVolumes{id name size dataCenterId}}}");
-      const v=((d0.myself||{}).networkVolumes||[]).find(x=>x.name==="ki-chat-vol");
+      const v=((d0.myself||{}).networkVolumes||[]).find(x=>x.name===vName);
       if(v){vol=v.id;dcid=v.dataCenterId}
       else{
-        const {code,obj}=await rest("POST","/v2/network-volumes",{name:"ki-chat-vol",dataCenter:g("dc"),size:parseInt(g("volGB"))||60});
-        if(obj.id){vol=obj.id;dcid=obj.dataCenter||g("dc")}
+        const {code,obj}=await rest("POST","/v2/network-volumes",{name:vName,dataCenter:vDc,size:vGB});
+        if(obj.id){vol=obj.id;dcid=obj.dataCenter||vDc}
         else{msg(`Volume konnte nicht erstellt werden (HTTP ${code}): ${obj.message||obj.error||obj._raw||"keine Details"}`);return}
       }
     }
-    const dev=g("mode")==="dev",errs=[],maxP=parseFloat(g(dev?"devMaxPrice":"maxPrice"))||0;
+    const dev=g("mode")==="dev",errs=[],over=[],maxP=parseFloat(g(dev?"devMaxPrice":"maxPrice"))||0;
     for(const en of (g("apiKey")?(dev?GLD:g("gpus").split("\n")):[]).map(x=>x.trim()).filter(Boolean)){
       const n=en.startsWith("2x ")?2:1,gp=n===2?en.slice(3):en;
-      if((SKIP[en]||0)>Date.now()){errs.push(en+": zuletzt über dem Preislimit, wird gerade übersprungen");if(dev){msg(`Dev-Server: Keine GPU im Preislimit von $${maxP.toFixed(2)}/h frei.\n\n`+errs.join("\n"));RETRY=true;return}continue}
+      if((SKIP[en]||0)>Date.now()){over.push(en);continue}
       msg("Versuche "+en+"…");
       try{
         const {data:d,err}=await gql(deploy(gp,vol,dcid,window.SETUP_B64,n,dev));
         const p=d.podFindAndDeployOnDemand;
         if(p&&p.id){
           const c=p.costPerHr||0;
-          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(AUTO)SKIP[en]=Date.now()+600000;if(dev){RETRY=true;msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`+(errs.length>1?"\n\nGünstigere Varianten, nicht bekommen:\n"+errs.slice(0,-1).join("\n"):""));return}continue}
+          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);SKIP[en]=Date.now()+600000;over.push(`${en} ($${c.toFixed(2)}/h)`);continue}
           S.podId=p.id;LS.setItem("ks_gpuUsed",gp);msg("Pod erstellt: "+gp);await poll();return;
         }
         errs.push(gp+": "+(err||"keine Antwort"));
       }catch(e){errs.push(gp+": "+e.message)}
     }
     if(g("vastKey")&&!dev){await startVast(window.SETUP_B64,errs);return}
-    msg("Keine GPU frei oder Fehler:\n"+errs.join("\n"));RETRY=true;
+    msg((over.length?`Über deinem Preislimit von $${maxP.toFixed(2)}/h und deshalb ausgelassen: ${over.join(", ")}. Limit in den Einstellungen erhöhen, wenn du sie nutzen willst.\n\n`:"")+"Keine GPU frei oder Fehler:\n"+errs.join("\n"));RETRY=true;
   }catch(e){msg("Volume-Fehler: "+e.message)}
   finally{S.busy=false;draw()}
 }
@@ -328,14 +339,16 @@ async function stopPod(force){
   try{if(S.prov==="vast"){const {code}=await vast("DELETE",`/instances/${S.podId}/`);if(code<200||code>=300){msg("Vast.ai: Beenden fehlgeschlagen (HTTP "+code+"). Bitte in der Vast.ai-Konsole löschen.");return}}else await gql(`mutation{podTerminate(input:{podId:${q(S.podId)}})}`);msg("Pod beendet.");S.podId=null;S.phase="none"}catch(e){msg("Fehler beim Beenden: "+e.message)}
   poll();
 }
-async function delVol(){
-  if(!S.volId||!confirm("Volume löschen? Alle gespeicherten Modelle sind dann weg."))return;
-  try{const {code,obj}=await rest("DELETE","/v2/network-volumes/"+S.volId);msg(code>=200&&code<300?"Volume gelöscht.":`Löschen fehlgeschlagen (HTTP ${code}): ${obj.message||"bitte in der RunPod-Konsole löschen"}`)}catch(e){msg("Fehler beim Löschen: "+e.message)}
+async function delVol(dev){
+  const id=dev===true?S.devVolId:S.volId;
+  if(!id||!confirm(dev===true?"Dev-Volume löschen? Das gespeicherte Programmier-Modell und die Projekte darauf sind dann weg.":"Volume löschen? Alle gespeicherten Modelle sind dann weg."))return;
+  try{const {code,obj}=await rest("DELETE","/v2/network-volumes/"+id);msg(code>=200&&code<300?"Volume gelöscht.":`Löschen fehlgeschlagen (HTTP ${code}): ${obj.message||"bitte in der RunPod-Konsole löschen"}`)}catch(e){msg("Fehler beim Löschen: "+e.message)}
   poll();
 }
 /* ---- UI ---- */
 function volTxt(){const m=((parseInt(g("volGB"))||60)*.07).toFixed(2);$("volText").textContent=`Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $${m} pro Monat (${g("volGB")} GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (${g("dc")}).`}
 function setMode(m){s("mode",m);draw()}
+$("devVol").addEventListener("change",e=>{s("devVol",e.target.checked?"1":"0");draw()});
 const TT={none:"Kein Pod",boot:"Pod startet",setup:"Setup läuft",loading:"Modelle laden",ready:"Bereit"};
 function draw(){
   const none=S.phase==="none",mode=g("mode");
@@ -346,6 +359,8 @@ function draw(){
   $("m_demand").className="card"+(mode==="demand"?" sel":"");$("m_volume").className="card"+(mode==="volume"?" sel":"");$("m_dev").className="card"+(mode==="dev"?" sel":"");
   const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");rb("dev","Dev-Server");
   volTxt();$("volCard").style.display=mode==="volume"?"":"none";
+  const dvOn=g("devVol")==="1";$("devCard").style.display=mode==="dev"?"":"none";$("devVol").checked=dvOn;$("devVolBox").style.display=dvOn?"":"none";$("devVolOff").style.display=dvOn?"none":"";
+  $("devVolInfo").textContent=S.devVolId?"Vorhandenes Dev-Volume: "+S.devVolInfo:"";$("delDevVol").style.display=S.devVolId?"":"none";$("devVolSize").style.display=S.devVolId?"none":"";
   $("volInfo").textContent=S.volId?"Vorhandenes Volume: "+S.volInfo:"";$("delVol").style.display=S.volId?"":"none";$("volSize").style.display=S.volId?"none":"";
   $("go").disabled=S.busy&&!AUTO;$("go").textContent=AUTO?"Autostart beenden":S.busy?"Starte…":"Starten";$("go").className="btn"+(AUTO?" dan":"");$("autoInfo").textContent=autoTxt;
   $("ttl").textContent=TT[S.phase];$("ttl").className=S.phase==="ready"?"grn":"";$("info").textContent=S.info;

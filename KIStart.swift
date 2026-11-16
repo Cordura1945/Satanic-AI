@@ -130,6 +130,12 @@ final class Model: ObservableObject {
     @Published var volDC = ""
     @Published var maxPrice: Double { didSet { UserDefaults.standard.set(maxPrice, forKey: "maxPrice") } }
     @Published var devMaxPrice: Double { didSet { UserDefaults.standard.set(devMaxPrice, forKey: "devMaxPrice") } }
+    // Dev-Server mit eigenem Network Volume "ki-dev-vol" (Modell und Projekte bleiben gespeichert)
+    @Published var devVol: Bool { didSet { UserDefaults.standard.set(devVol, forKey: "devVol") } }
+    @Published var devVolGB: Int { didSet { UserDefaults.standard.set(devVolGB, forKey: "devVolGB") } }
+    @Published var devDc: String { didSet { UserDefaults.standard.set(devDc, forKey: "devDc") } }
+    @Published var devVolId: String? = nil
+    @Published var devVolInfo = ""
     // Dev-Server: zuerst zwei 48-GB-GPUs, sonst eine 80-GB-GPU. "2x " heisst zwei GPUs im Pod.
     static let devGpus: [String] = ["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"]
 
@@ -188,6 +194,9 @@ final class Model: ObservableObject {
         gpus = u.string(forKey: "gpus") ?? gl
         maxPrice = u.object(forKey: "maxPrice") as? Double ?? 0.60
         devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 1.25
+        devVol = u.bool(forKey: "devVol")
+        devVolGB = u.object(forKey: "devVolGB") as? Int ?? 60
+        devDc = u.string(forKey: "devDc") ?? "EU-RO-1"
         mode = u.string(forKey: "mode") ?? "demand"
         volGB = u.object(forKey: "volGB") as? Int ?? 60
         dc = u.string(forKey: "dc") ?? "EU-RO-1"
@@ -399,6 +408,11 @@ final class Model: ObservableObject {
                 volInfo = "\(sz) GB · \(v["dataCenterId"] as? String ?? "?") · ca. $\(String(format: "%.2f", Double(sz) * 0.07))/Monat"
                 volDC = v["dataCenterId"] as? String ?? ""
             } else { volId = nil; volInfo = ""; volDC = "" }
+            if let v = vols.first(where: { ($0["name"] as? String) == "ki-dev-vol" }) {
+                devVolId = v["id"] as? String
+                let sz = (v["size"] as? NSNumber)?.intValue ?? 0
+                devVolInfo = "\(sz) GB · \(v["dataCenterId"] as? String ?? "?") · ca. $\(String(format: "%.2f", Double(sz) * 0.07))/Monat"
+            } else { devVolId = nil; devVolInfo = "" }
             let pods = me["pods"] as? [[String: Any]] ?? []
             guard let pod = pods.first(where: { ($0["name"] as? String) == "ki-chat" && ($0["desiredStatus"] as? String) == "RUNNING" }),
                   let id = pod["id"] as? String else {
@@ -468,8 +482,11 @@ final class Model: ObservableObject {
         var n = 0
         while autoRun {
             n += 1
-            await checkLicense()
-            if !licenseOK { licenseMsg = "Lizenz ungültig – Start blockiert. Bitte Lizenz-Key prüfen."; break }
+            // Lizenz am Anfang und dann etwa alle 100 Versuche pruefen, nicht alle 3 Sekunden
+            if n % 100 == 1 {
+                await checkLicense()
+                if !licenseOK { licenseMsg = "Lizenz ungültig – Start blockiert. Bitte Lizenz-Key prüfen."; break }
+            }
             retryable = false
             autoInfo = n == 1 ? "" : "Autostart: Versuch \(n) läuft…"
             await start()
@@ -535,18 +552,22 @@ final class Model: ObservableObject {
         var errs: [String] = []
         var useVol: String? = nil
         var useDC: String? = nil
-        if mode == "volume" && !apiKey.isEmpty {
+        let devMode = mode == "dev"
+        let volName = devMode ? "ki-dev-vol" : "ki-chat-vol"
+        let volSize = devMode ? devVolGB : volGB
+        let volWant = devMode ? devDc.trimmingCharacters(in: .whitespaces).uppercased() : dc
+        if (mode == "volume" || (devMode && devVol)) && !apiKey.isEmpty {
             message = "Network Volume wird vorbereitet…"
             do {
                 let rp = RunPod(key: apiKey)
                 let (d0, _) = try await rp.gql("query{myself{networkVolumes{id name size dataCenterId}}}")
                 let vs = (d0["myself"] as? [String: Any])?["networkVolumes"] as? [[String: Any]] ?? []
-                if let v = vs.first(where: { ($0["name"] as? String) == "ki-chat-vol" }), let id = v["id"] as? String {
+                if let v = vs.first(where: { ($0["name"] as? String) == volName }), let id = v["id"] as? String {
                     useVol = id; useDC = v["dataCenterId"] as? String
                 } else {
-                    let (code, obj) = try await rp.rest("POST", "/v2/network-volumes", ["name": "ki-chat-vol", "dataCenter": dc, "size": volGB])
+                    let (code, obj) = try await rp.rest("POST", "/v2/network-volumes", ["name": volName, "dataCenter": volWant, "size": volSize])
                     if let id = obj["id"] as? String {
-                        useVol = id; useDC = (obj["dataCenter"] as? String) ?? dc
+                        useVol = id; useDC = (obj["dataCenter"] as? String) ?? volWant
                     } else {
                         let em = (obj["message"] as? String) ?? (obj["error"] as? String) ?? (obj["_raw"] as? String) ?? "keine Details"
                         message = "Volume konnte nicht erstellt werden (HTTP \(code)): \(em)"
@@ -559,6 +580,7 @@ final class Model: ObservableObject {
             }
         }
         let dev = mode == "dev"
+        var over: [String] = []
         let licKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let limit = dev ? devMaxPrice : maxPrice
         let list: [String] = dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -566,12 +588,7 @@ final class Model: ObservableObject {
             let n = entry.hasPrefix("2x ") ? 2 : 1
             let g = n == 2 ? String(entry.dropFirst(3)) : entry
             if let t = skipUntil[entry], t > Date() {
-                errs.append("\(entry): zuletzt über dem Preislimit, wird gerade übersprungen")
-                if dev {
-                    message = "Dev-Server: Keine GPU im Preislimit von $\(String(format: "%.2f", limit))/h frei.\n\n" + errs.joined(separator: "\n")
-                    retryable = true
-                    return
-                }
+                over.append(entry)
                 continue
             }
             message = "Versuche \(entry)…"
@@ -583,12 +600,8 @@ final class Model: ObservableObject {
                     if limit > 0 && c > limit {
                         _ = try? await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
                         errs.append("\(entry): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
-                        if autoRun { skipUntil[entry] = Date().addingTimeInterval(600) }
-                        if dev {
-                            retryable = true
-                            message = "Dev-Server: Die günstigste freie GPU (\(entry)) kostet $\(String(format: "%.2f", c))/h und liegt über deinem Limit von $\(String(format: "%.2f", limit))/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen." + (errs.count > 1 ? "\n\nGünstigere Varianten, nicht bekommen:\n" + errs.dropLast().joined(separator: "\n") : "")
-                            return
-                        }
+                        skipUntil[entry] = Date().addingTimeInterval(600)
+                        over.append("\(entry) ($\(String(format: "%.2f", c))/h)")
                         continue
                     }
                     podId = id
@@ -607,7 +620,8 @@ final class Model: ObservableObject {
             await startVast(b64: b64, errs: errs)
             return
         }
-        message = "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
+        let hint = over.isEmpty ? "" : "Über deinem Preislimit von $\(String(format: "%.2f", limit))/h und deshalb ausgelassen: " + over.joined(separator: ", ") + ". Limit in den Einstellungen erhöhen, wenn du sie nutzen willst.\n\n"
+        message = hint + "Keine GPU frei oder Fehler:\n" + errs.joined(separator: "\n")
         retryable = true
     }
 
@@ -650,8 +664,8 @@ final class Model: ObservableObject {
         retryable = true
     }
 
-    func deleteVolume() async {
-        guard let id = volId else { return }
+    func deleteVolume(dev: Bool = false) async {
+        guard let id = dev ? devVolId : volId else { return }
         do {
             let (code, obj) = try await RunPod(key: apiKey).rest("DELETE", "/v2/network-volumes/\(id)")
             if (200...299).contains(code) { message = "Volume gelöscht." }
@@ -901,6 +915,7 @@ struct ContentView: View {
     @State private var web: WebLink? = nil
     @State private var confirmStop = false
     @State private var confirmVol = false
+    @State private var confirmDevVol = false
     @State private var showSettings = false
     @State private var noBack = false
     @State private var player: AVPlayer? = nil
@@ -1047,7 +1062,28 @@ struct ContentView: View {
                 modeCard("volume", "Network Volume",
                          "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\((m.volId != nil && !m.volDC.isEmpty) ? m.volDC : m.dc)).")
                 modeCard("dev", "Dev-Server",
-                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.")
+                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Ohne Volume lädt jeder Start alles neu (ca. 15–30 Min), mit eigenem Dev-Volume nur der erste. Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.")
+                if m.mode == "dev" {
+                    Card {
+                        Toggle(isOn: $m.devVol) {
+                            Text("Network Volume für den Dev-Server").font(Theme.mono(12, bold: true)).foregroundColor(.white)
+                        }.tint(Theme.green)
+                        if m.devVol {
+                            if m.devVolId != nil {
+                                Text("Vorhandenes Dev-Volume: \(m.devVolInfo)").font(Theme.mono(12)).foregroundColor(Theme.gray)
+                                Button("[x] Dev-Volume löschen", role: .destructive) { confirmDevVol = true }.font(Theme.mono(12))
+                            } else {
+                                Stepper("Größe: \(m.devVolGB) GB (ca. $\(String(format: "%.2f", Double(m.devVolGB) * 0.07))/Monat)", value: $m.devVolGB, in: 55...200, step: 5)
+                                    .foregroundColor(.white).font(Theme.mono(12))
+                                TextField("Rechenzentrum, z.B. EU-RO-1", text: $m.devDc).modifier(Field()).textInputAutocapitalization(.characters).autocorrectionDisabled()
+                            }
+                            Text("Eigenes Volume „ki-dev-vol“: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.")
+                                .font(Theme.mono(11.5)).foregroundColor(Theme.gray)
+                        } else {
+                            Text("Aus: On Demand, bei jedem Start wird alles neu geladen.").font(Theme.mono(11.5)).foregroundColor(Theme.gray)
+                        }
+                    }
+                }
                 if m.mode == "volume" {
                     Card {
                         if m.volId != nil {
@@ -1174,6 +1210,10 @@ struct ContentView: View {
         .tint(Theme.gold)
         .confirmationDialog("Pod wirklich beenden? Alles im Pod geht verloren (ein Network Volume bleibt erhalten).", isPresented: $confirmStop, titleVisibility: .visible) {
             Button("Beenden", role: .destructive) { Task { await m.terminate() } }
+            Button("Abbrechen", role: .cancel) {}
+        }
+        .confirmationDialog("Dev-Volume löschen? Das gespeicherte Programmier-Modell und die Projekte darauf sind dann weg.", isPresented: $confirmDevVol, titleVisibility: .visible) {
+            Button("Dev-Volume löschen", role: .destructive) { Task { await m.deleteVolume(dev: true) } }
             Button("Abbrechen", role: .cancel) {}
         }
         .confirmationDialog("Volume löschen? Alle gespeicherten Modelle sind dann weg.", isPresented: $confirmVol, titleVisibility: .visible) {
