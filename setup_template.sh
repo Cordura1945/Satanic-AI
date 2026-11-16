@@ -178,8 +178,14 @@ else
   if [ ! -x llama.cpp/build/bin/llama-server ]; then
     apt-get update -qq >/dev/null 2>&1
     apt-get install -y -qq cmake build-essential git libssl-dev >/dev/null 2>&1
-    [ -d llama.cpp ] || git clone https://github.com/ggml-org/llama.cpp
-    cd llama.cpp
+    # Schlanker Download mit Wiederholung: ein Verbindungsaussetzer bei GitHub soll den Start nicht kippen
+    for i in 1 2 3 4; do
+      [ -f llama.cpp/CMakeLists.txt ] && break
+      rm -rf llama.cpp
+      git -c http.version=HTTP/1.1 clone --depth 1 https://github.com/ggml-org/llama.cpp && break
+      echo "HINWEIS: llama.cpp laden, Versuch $i fehlgeschlagen"; sleep $((i * 10))
+    done
+    cd llama.cpp || { echo "FEHLER: llama.cpp konnte nicht geladen werden"; cd /workspace; mkdir -p llama.cpp; cd llama.cpp; }
     cmake -B build -DGGML_CUDA=ON >/tmp/cmake.log 2>&1 && \
     cmake --build build --config Release -j"$(nproc)" --target llama-server >/tmp/build.log 2>&1
   else
