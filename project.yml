@@ -7,6 +7,10 @@ targets:
   KIStart:
     type: application
     platform: iOS
+    info:
+      path: Info.plist
+      properties:
+        UIBackgroundModes: [audio]
     sources:
       - path: KIStart.swift
       - path: setup_all.sh.gz

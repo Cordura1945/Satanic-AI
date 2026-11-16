@@ -278,7 +278,7 @@ async function autoStart(){
     n++;RETRY=false;autoTxt=n===1?"":"Autostart: Versuch "+n+" läuft…";draw();
     await start();
     if(S.podId||!RETRY)break;
-    for(let s=30;s>0&&AUTO;s--){autoTxt="Autostart: Versuch "+n+" ohne passende GPU. Nächster Versuch in "+s+" s.";draw();await new Promise(r=>setTimeout(r,1000))}
+    autoTxt="Autostart: Versuch "+n+" ohne passende GPU, suche weiter…";draw();await new Promise(r=>setTimeout(r,3000))
   }
   AUTO=false;autoTxt="";draw();
 }

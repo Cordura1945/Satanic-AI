@@ -4,6 +4,7 @@ import Security
 import AVFoundation
 import WebKit
 import CryptoKit
+import UserNotifications
 
 // MARK: - Speicher fuer Zugangsdaten (Schluesselbund, Ersatz: UserDefaults)
 enum Keychain {
@@ -462,6 +463,8 @@ final class Model: ObservableObject {
         autoRun = true
         skipUntil = [:]
         UIApplication.shared.isIdleTimerDisabled = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        keepAlive(true)
         var n = 0
         while autoRun {
             n += 1
@@ -472,19 +475,42 @@ final class Model: ObservableObject {
             await start()
             if podId != nil {
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+                if UIApplication.shared.applicationState != .active {
+                    let c = UNMutableNotificationContent()
+                    c.title = "Satanic"
+                    c.body = "Server gefunden (\(gpuUsed)), Pod startet."
+                    c.sound = .default
+                    try? await UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "pod-gefunden", content: c, trigger: nil))
+                }
                 break
             }
             if !retryable { break }
-            var s = 30
-            while s > 0 && autoRun {
-                autoInfo = "Autostart: Versuch \(n) ohne passende GPU. Nächster Versuch in \(s) s."
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                s -= 1
-            }
+            autoInfo = "Autostart: Versuch \(n) ohne passende GPU, suche weiter…"
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         autoRun = false
         autoInfo = ""
         UIApplication.shared.isIdleTimerDisabled = false
+        keepAlive(false)
+    }
+
+    // Im Hintergrund pausiert iOS die App. Damit die Suche weiterlaeuft, spielt die App waehrend des
+    // Autostarts lautlose Stille ab (Hintergrundmodus "audio", siehe project.yml). Andere Musik laeuft weiter.
+    private var silence: AVAudioPlayer? = nil
+    private func keepAlive(_ on: Bool) {
+        if !on { silence?.stop(); silence = nil; return }
+        let sr: UInt32 = 8000
+        var d = Data()
+        func u32(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        func u16(_ v: UInt16) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        d.append(contentsOf: Array("RIFF".utf8)); u32(36 + sr * 2); d.append(contentsOf: Array("WAVE".utf8))
+        d.append(contentsOf: Array("fmt ".utf8)); u32(16); u16(1); u16(1); u32(sr); u32(sr * 2); u16(2); u16(16)
+        d.append(contentsOf: Array("data".utf8)); u32(sr * 2); d.append(Data(count: Int(sr * 2)))
+        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setActive(true)
+        silence = try? AVAudioPlayer(data: d)
+        silence?.numberOfLoops = -1
+        silence?.play()
     }
 
     func stopAuto() {
