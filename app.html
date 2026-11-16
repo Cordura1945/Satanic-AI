@@ -41,7 +41,10 @@ pre{font:inherit;font-size:11px;line-height:1.35;color:var(--gry);white-space:pr
 details>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center}details>summary::-webkit-details-marker{display:none}
 details>summary::after{content:"+";color:var(--gold);font-weight:700}details[open]>summary::after{content:"-"}
 #dz{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;z-index:30;display:none}
-@media (min-aspect-ratio:3/4){#dz{object-fit:contain}}
+@media (min-aspect-ratio:3/4){#dz,#sp{object-fit:contain}}
+/* Breites Fenster (Monitor): Fenster fuellt die Breite, zwei Spalten, groessere Schrift */
+@media (min-width:900px){.win{max-width:none}.body{zoom:1.15;padding:18px 22px 30px}.w{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px 22px;align-items:start;max-width:1500px;margin:0 auto}.prompt,.foot,#msg{grid-column:1/-1}.w>.card{grid-column:1;grid-row:2}#set{grid-column:1;grid-row:3}#startView,#runView{grid-column:2;grid-row:2/span 2}#msg{grid-row:4}}
+@media (min-width:1500px){.body{zoom:1.35}}
 #chat{position:fixed;inset:0;z-index:20;background:#1a1a1a;display:none}
 #chat iframe{width:100%;height:100%;border:0}
 #x{position:absolute;top:max(10px,env(safe-area-inset-top));left:10px;z-index:21;width:40px;height:40px;border-radius:20px;border:none;background:rgba(0,0,0,.55);color:#fff;font-size:22px;cursor:pointer}
@@ -340,8 +343,8 @@ async function openChat(){if(!await licGate()){msg($("licMsg").textContent);retu
   if(g("mode")!=="dev"||dzSeen||!v){go();return}
   /* Dev-Server: beim ersten Oeffnen laeuft das Intro "Satanic Dev Zone" (Tippen ueberspringt) */
   dzSeen=true;let f=false;const end=()=>{if(f)return;f=true;try{v.pause()}catch(e){}v.style.display="none";go()};
-  v.style.display="block";v.onended=end;v.onerror=end;v.onclick=end;setTimeout(end,11000);
-  try{v.currentTime=0}catch(e){}v.play().catch(()=>{v.muted=true;v.play().catch(end)})}
+  v.src=innerWidth>innerHeight?"devzone_wide.mp4":"devzone.mp4";v.style.display="block";v.onended=end;v.onerror=end;v.onclick=end;setTimeout(end,11000);
+  v.play().catch(()=>{v.muted=true;v.play().catch(end)})}
 function closeChat(){$("chat").style.display="none";$("cf").src="about:blank"}
 /* ---- Loop ---- */
 let pt=null;
