@@ -77,4 +77,22 @@ await call("/api", { action: "restart", key: tk }, tv.ADMIN_PW, tv);
 r = await call("/verify", { key: tk, device: "tester-geraet-2" }, null, tv); ok(r.s === 200 && r.j.valid && r.j.until > Date.now() + 23 * 3600000, "Laufzeit neu starten gibt wieder 24 Stunden");
 r = await call("/api", { action: "create", note: "voll" }, tv.ADMIN_PW, tv);
 r = await call("/verify", { key: r.j.key, device: "kaeufer-geraet-1" }, null, tv); ok(r.j.valid && r.j.test === undefined && r.j.until === undefined, "Voll-Lizenz hat keine Laufzeit");
+// Setup-Abruf fuer den Pod
+const sv = { LIC: new KV(), ADMIN_PW: env.ADMIN_PW };
+await sv.LIC.put("setup:main", "#!/bin/bash\necho hallo\n");
+const getSetup = async (name, lic) => { const q = await worker.fetch(new Request("https://x.test/setup/" + name, { headers: lic ? { "X-License": lic } : {} }), sv); return { s: q.status, t: await q.text() }; };
+r = await call("/api", { action: "create", note: "voll" }, sv.ADMIN_PW, sv); const sk = r.j.key;
+r = await getSetup("main", ""); ok(r.s === 400, "Setup-Abruf ohne Lizenz-Key wird abgelehnt");
+r = await getSetup("main", "SATANIC-GIBT-ESNI-CHTX-XXXX"); ok(r.s === 403 && !r.t.includes("hallo"), "Setup-Abruf mit unbekanntem Key wird abgelehnt");
+r = await getSetup("main", sk.toLowerCase()); ok(r.s === 200 && r.t.startsWith("#!/bin/bash") && r.t.includes("hallo"), "Setup-Abruf mit gueltigem Key liefert das Skript");
+r = await call("/api", { action: "list" }, sv.ADMIN_PW, sv); ok(r.j.keys.length === 1 && r.j.keys[0].device === false, "Setup-Abruf bindet kein Geraet, Setup-Eintrag taucht nicht in der Key-Liste auf");
+r = await getSetup("gibtsnicht", sk); ok(r.s === 404, "unbekanntes Setup: 404");
+r = await getSetup("a%2F..%2Fkey:x", sk); ok(r.s === 400, "Setup-Name mit unerlaubten Zeichen wird abgelehnt");
+await call("/api", { action: "revoke", key: sk }, sv.ADMIN_PW, sv);
+r = await getSetup("main", sk); ok(r.s === 403, "Setup-Abruf mit gesperrtem Key wird abgelehnt");
+r = await call("/api", { action: "create", note: "Tester", hours: 24 }, sv.ADMIN_PW, sv); const stk = r.j.key;
+r = await call("/verify", { key: stk, device: "tester-geraet-9" }, null, sv);
+r = await getSetup("main", stk); ok(r.s === 200, "Setup-Abruf mit laufender Test-Lizenz geht");
+{ const e = JSON.parse(await sv.LIC.get("key:" + stk)); e.start = new Date(Date.now() - 25 * 3600000).toISOString(); await sv.LIC.put("key:" + stk, JSON.stringify(e)); }
+r = await getSetup("main", stk); ok(r.s === 403, "Setup-Abruf mit abgelaufener Test-Lizenz wird abgelehnt");
 process.exit(bad ? 1 : 0);

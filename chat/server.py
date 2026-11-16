@@ -2087,14 +2087,6 @@ class H(BaseHTTPRequestHandler):
                 name = os.path.basename(unquote(parse_qs(u.query).get("name", ["datei"])[0]))[:120] or "datei"
                 r = save_doc(name, body); touch(); return self._send(200, r)
             except Exception as e: return self._send(500, {"error": f"{type(e).__name__}: {e}"})
-        if u.path == "/api/pdf":
-            touch()
-            try:
-                d = json.loads(body); txt = re.sub(r"\[(?:Erzeugte|Erstellte)[^\]]*\]", "", str(d.get("text", ""))).strip()
-                if not txt: raise ValueError("kein Text")
-                fid, nm = tool_file({"filename": "Dokument.pdf", "content": txt, "title": str(d.get("title", ""))})
-                return self._send(200, {"id": fid, "name": nm})
-            except Exception as e: return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if u.path == "/api/chats/save":
             try:
                 d = json.loads(body); p = chat_file(d["id"])

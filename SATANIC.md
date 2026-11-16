@@ -17,10 +17,10 @@
 
 ## Regeln
 - Aenderungen am Chat (Verhalten, Werkzeuge, Oberflaeche): nur chat/server.py und chat/index.html.
-- setup_all.sh nie anlegen, bearbeiten oder pushen. Die Datei wird erzeugt.
+- setup_all.sh und setup_full.sh nie anlegen, bearbeiten oder pushen. Die Dateien werden erzeugt.
 - Nichts aus Base64 entpacken: alle Quelltexte liegen als normale Dateien vor.
 - Nach jeder Aenderung pruefen: run mit "python3 tools/build_setup.py --check" im Projektordner.
-- Das Setup-Skript hat eine Groessengrenze (die Pruefung nennt sie). Wird sie ueberschritten, startet kein Pod mehr. chat/server.py und chat/index.html deshalb schlank halten: nichts Unnoetiges einbauen, keine grossen eingebetteten Daten.
+- Setup-Skript: Die App schickt nur ein kleines Start-Skript mit. Das volle Setup-Skript (setup_full.sh) legt der Build auf dem Lizenz-Server ab (Schluessel setup:<branch>), der Pod laedt es von dort mit dem Lizenz-Key (LICENSE_KEY). Die alte Groessengrenze gilt damit nicht mehr. Trotzdem nichts Unnoetiges in chat/ einbauen. Ohne Lizenz-Server in license/config.json steckt das volle Skript wie frueher in der App, dann gilt die Grenze wieder.
 - Fertig heisst: git_push, danach build_status. Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
 - git_push geht hier auf den Arbeitszweig satanic-dev, nie auf main. Der Build dazu liegt im Release latest-satanic-dev. Nach main uebernehmen kann nur der Nutzer ueber den Link, den git_push nennt.
 - In run kein git push, pull, fetch, merge oder rebase: git_clone holt den neuesten Stand, git_push gleicht selbst ab. Bei einem Konflikt: git_clone mit fresh=true, dann die Aenderung neu einbauen.

@@ -9,7 +9,7 @@ Aufruf:
   python3 tools/build_setup.py          erzeugt setup_all.sh (macht der Build automatisch)
   python3 tools/build_setup.py --check  prueft nur: Syntax, Selbstentpacken, Groesse
 """
-import base64, gzip, lzma, os, re, shutil, subprocess, sys, tempfile
+import base64, gzip, lzma, os, re, shutil, subprocess, sys, tempfile, urllib.error
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(ROOT, "setup_template.sh")
@@ -18,6 +18,45 @@ OUT = os.path.join(ROOT, "setup_all.sh")
 # Bis 97.200 Zeichen lief das nachweislich, bei 99.560 kam HTTP 500. Deshalb darunter bleiben.
 LIMIT = 96000
 LIC_MARK = "LICENSE_SERVER_PLACEHOLDER"
+FULL = os.path.join(ROOT, "setup_full.sh")
+KV_NAMESPACE = "c8cce7d941d0448e814116446000f406"  # Speicher LIC des Lizenz-Servers (license/wrangler.toml)
+
+# Kleines Start-Skript: laedt das eigentliche Setup-Skript vom Lizenz-Server. Damit haengt der Pod-Start
+# nicht mehr an der Groessengrenze. Scheitert das Laden, zeigt es der Starter-App eine Fehlermeldung an.
+LOADER = r"""#!/bin/bash
+# Satanic-AI Start: laedt das Setup-Skript vom Lizenz-Server und fuehrt es aus. Quelltext: tools/build_setup.py.
+U="@@URL@@"; F="$(dirname "$0")/setup_full.sh"
+PY=$(command -v python3 || command -v python)
+"$PY" - "$U" "$F" <<'PYL' || exit 1
+import json, os, sys, time, urllib.request, urllib.error
+u, out = sys.argv[1], sys.argv[2]; err = "unbekannt"
+for i in range(6):
+    try:
+        rq = urllib.request.Request(u, headers={"X-License": os.environ.get("LICENSE_KEY", ""), "User-Agent": "satanic-setup/1"})
+        d = urllib.request.urlopen(rq, timeout=120).read()
+        if d.startswith(b"#!/bin/bash") and len(d) > 2000:
+            open(out, "wb").write(d); sys.exit(0)
+        err = "unerwartete Antwort"
+    except urllib.error.HTTPError as e:
+        err = {400: "Lizenz-Key fehlt", 403: "Lizenz vom Server abgelehnt", 404: "Setup-Dateien fehlen auf dem Server"}.get(e.code, "HTTP %d" % e.code)
+        if e.code in (400, 403, 404): break
+    except Exception as e:
+        err = type(e).__name__
+    print("Setup-Dateien laden: Versuch %d fehlgeschlagen (%s)" % (i + 1, err), flush=True)
+    time.sleep(5 * (i + 1))
+msg = "FEHLER: Setup-Dateien konnten nicht geladen werden (%s). Pod beenden und neu starten." % err
+print(msg, flush=True)
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(s, *a): pass
+    def do_GET(s):
+        b = json.dumps({"phase": "setup", "pct": 5, "label": "Fehler", "log": [msg]}).encode()
+        s.send_response(200); s.send_header("Content-Type", "application/json"); s.send_header("Access-Control-Allow-Origin", "*")
+        s.send_header("Content-Length", str(len(b))); s.end_headers(); s.wfile.write(b)
+HTTPServer(("0.0.0.0", 8000), H).serve_forever()
+PYL
+exec bash "$F" "$@"
+"""
 
 BOOT = r'''#!/bin/bash
 # Satanic-AI Setup, selbstentpackend. Quelltext: setup_template.sh und chat/ im Repo.
@@ -118,8 +157,57 @@ def check(data, real):
         except subprocess.TimeoutExpired:
             say(False, "Probelauf des Chat-Servers (Zeitlimit ueberschritten)")
     size = len(base64.b64encode(gzip.compress(data, 9, mtime=0)))
-    say(size <= LIMIT, f"Groesse fuer den Pod-Start: {size} von hoechstens {LIMIT} Zeichen")
+    if license_server():
+        ld = loader()
+        if bash:
+            r = subprocess.run([bash, "-n"], input=ld, capture_output=True)
+            say(r.returncode == 0, "Start-Skript Shell-Syntax")
+        lsize = len(base64.b64encode(gzip.compress(ld, 9, mtime=0)))
+        say(lsize <= LIMIT, f"Groesse fuer den Pod-Start: {lsize} Zeichen (das Setup-Skript mit {size} Zeichen laedt der Pod vom Lizenz-Server, keine Groessengrenze mehr)")
+    else:
+        say(size <= LIMIT, f"Groesse fuer den Pod-Start: {size} von hoechstens {LIMIT} Zeichen")
     return ok
+
+
+def setup_name():
+    """Name, unter dem das Setup-Skript auf dem Lizenz-Server liegt: der Branch des Builds."""
+    return re.sub(r"[^A-Za-z0-9._-]", "-", os.environ.get("GITHUB_REF_NAME", ""))[:80]
+
+
+def remote():
+    """Im Build (CI) mit Lizenz-Server: Die App schickt nur das kleine Start-Skript mit, der Pod laedt den Rest."""
+    return bool(os.environ.get("CI") and license_server() and setup_name())
+
+
+def loader():
+    return LOADER.replace("@@URL@@", license_server() + "/setup/" + (setup_name() or "main")).encode("utf-8")
+
+
+def upload():
+    """Legt setup_full.sh im Speicher des Lizenz-Servers ab (Schluessel setup:<branch>) und liest es zur Kontrolle zurueck."""
+    import json, urllib.request
+    tok = os.environ.get("CLOUDFLARE_API_TOKEN", "")
+    if not tok:
+        raise SystemExit("FEHLER: GitHub-Secret CLOUDFLARE_API_TOKEN fehlt. Ohne es kann das Setup-Skript nicht auf dem Lizenz-Server abgelegt werden.")
+    api = "https://api.cloudflare.com/client/v4"
+
+    def call(method, path, body=None):
+        rq = urllib.request.Request(api + path, data=body, method=method, headers={"Authorization": "Bearer " + tok, "Content-Type": "application/octet-stream"})
+        try:
+            return urllib.request.urlopen(rq, timeout=60).read()
+        except urllib.error.HTTPError as e:
+            raise SystemExit(f"FEHLER: Cloudflare {method} {path.split('/storage')[-1]}: HTTP {e.code} {e.read()[:300].decode('utf-8', 'replace')}")
+
+    acc = os.environ.get("CLOUDFLARE_ACCOUNT_ID") or json.loads(call("GET", "/accounts"))["result"][0]["id"]
+    data = read(FULL)
+    path = f"/accounts/{acc}/storage/kv/namespaces/{KV_NAMESPACE}/values/setup:{setup_name()}"
+    call("PUT", path, data)
+    for i in range(6):
+        if call("GET", path) == data:
+            print(f"Setup-Skript auf dem Lizenz-Server abgelegt: setup:{setup_name()} ({len(data)} Bytes)")
+            return
+        import time; time.sleep(5)
+    raise SystemExit("FEHLER: Das abgelegte Setup-Skript stimmt beim Zuruecklesen nicht ueberein.")
 
 
 def license_server():
@@ -150,10 +238,20 @@ if __name__ == "__main__":
     data, real, used = build()
     if "--check" in sys.argv:
         sys.exit(0 if check(data, real) else 1)
+    with open(FULL, "wb") as f:
+        f.write(data)
+    if "--upload" in sys.argv:
+        upload()
+        sys.exit(0)
+    if remote():
+        data = loader()
     size = len(base64.b64encode(gzip.compress(data, 9, mtime=0)))
     if size > LIMIT:
         raise SystemExit(f"FEHLER: Setup-Skript ist mit {size} Zeichen zu gross fuer den Pod-Start (hoechstens {LIMIT}). Dateien in chat/ verkleinern.")
     with open(OUT, "wb") as f:
         f.write(data)
     apply_license()
-    print(f"setup_all.sh erzeugt ({len(data)} Bytes, {size} Zeichen fuer den Pod-Start) aus setup_template.sh + " + ", ".join(used))
+    if remote():
+        print(f"setup_all.sh erzeugt: kleines Start-Skript ({size} Zeichen), laedt setup:{setup_name()} vom Lizenz-Server. Volles Skript: setup_full.sh aus setup_template.sh + " + ", ".join(used))
+    else:
+        print(f"setup_all.sh erzeugt ({len(data)} Bytes, {size} Zeichen fuer den Pod-Start) aus setup_template.sh + " + ", ".join(used))

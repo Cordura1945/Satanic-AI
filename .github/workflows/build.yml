@@ -17,6 +17,13 @@ jobs:
     permissions:
       contents: write
     steps:
+    - uses: actions/checkout@v4
+    - name: Setup-Skript auf dem Lizenz-Server ablegen
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      run: |
+        python3 tools/build_setup.py
+        if grep -q '"server": *"https://' license/config.json; then python3 tools/build_setup.py --upload; else echo "Kein Lizenz-Server eingetragen: Setup-Skript bleibt in der App."; fi
     - name: Release fuer diesen Build neu anlegen
       env:
         GH_TOKEN: ${{ github.token }}

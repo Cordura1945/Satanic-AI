@@ -66,7 +66,7 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <div class="cap" style="margin-bottom:14px">STARTART WÄHLEN</div>
   <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>(*) On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
   <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:14px"><b>( ) Network Volume</b><div class="s" id="volText"></div></div>
-  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ca. $1.20–2.20 pro Stunde, eigenes Preislimit in den Einstellungen.</div></div>
+  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.</div></div>
   <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
    <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
    <div id="volSize"><label style="margin-top:0">Größe (GB)<input id="volGB" type="number" min="50" max="300" step="10"></label></div></div>
@@ -117,7 +117,7 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
 const GLD=["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"];var dzSeen=false;
-const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"2.2",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"1.25",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
 for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","autoStop","idleStop","disk","dc","volGB","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
@@ -137,9 +137,10 @@ async function rest(method,path,body){
   o._raw=t.slice(0,300);return {code:r.status,obj:o};
 }
 const q=JSON.stringify;
+function licKey(){return String(g("licenseKey")||"").trim().toUpperCase()}
 function deploy(gpu,vol,dcid,b64,n,dev){
   const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
-  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}${dev?`,{key:${q("DEV_SERVER")},value:${q("1")}}`:""}]`;
+  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}${dev?`,{key:${q("DEV_SERVER")},value:${q("1")}}`:""},{key:${q("LICENSE_KEY")},value:${q(licKey())}}]`;
   let v="";if(vol){v=`networkVolumeId:${q(vol)},`;if(dcid)v+=`dataCenterId:${q(dcid)},`}
   return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:${n||1},volumeInGb:0,containerDiskInGb:${Math.max(parseInt(g("disk"))||100,dev?80:0)},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
@@ -197,7 +198,7 @@ async function startVast(b64,errs){
   const qy={verified:{eq:true},rentable:{eq:true},rented:{eq:false},num_gpus:{eq:1},gpu_ram:{gte:44000},disk_space:{gte:disk},direct_port_count:{gte:1},cuda_max_good:{gte:12.8},inet_down:{gte:300},reliability:{gte:0.95},order:[["dph_total","asc"]],type:"on-demand",limit:8};
   if(maxP>0)qy.dph_total={lte:maxP};
   const onstart='mkdir -p /workspace\necho "$SETUP_B64" | base64 -d | gunzip > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n';
-  const env={HF_TOKEN:g("hfToken"),AUTO_STOP_H:String(g("autoStop")),IDLE_STOP_MIN:String(g("idleStop")),SETUP_B64:b64,"-p 8000:8000":"1"};
+  const env={HF_TOKEN:g("hfToken"),AUTO_STOP_H:String(g("autoStop")),IDLE_STOP_MIN:String(g("idleStop")),SETUP_B64:b64,LICENSE_KEY:licKey(),"-p 8000:8000":"1"};
   try{
     const {code,obj}=await vast("POST","/bundles/",qy);
     const offers=obj.offers||[];
@@ -296,7 +297,7 @@ async function start(){
         const p=d.podFindAndDeployOnDemand;
         if(p&&p.id){
           const c=p.costPerHr||0;
-          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${gp}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);continue}
+          if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);if(dev){msg(`Dev-Server: Die günstigste freie GPU (${en}) kostet $${c.toFixed(2)}/h und liegt über deinem Limit von $${maxP.toFixed(2)}/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen.`);return}continue}
           S.podId=p.id;LS.setItem("ks_gpuUsed",gp);msg("Pod erstellt: "+gp);await poll();return;
         }
         errs.push(gp+": "+(err||"keine Antwort"));

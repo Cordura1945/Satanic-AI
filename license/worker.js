@@ -44,6 +44,22 @@ async function verify(request, env) {
   return J({ valid: true, test: true, until: Date.parse(e.start) + e.hours * 3600000 });
 }
 
+// Setup-Skript fuer den Pod. Der Build legt es im Speicher unter "setup:<name>" ab (name = Branch).
+// Abruf nur mit gueltigem Lizenz-Key im Kopf X-License: bekannt, nicht gesperrt, nicht abgelaufen.
+// Ohne Geraetebindung, denn hier fragt der Pod und nicht das Geraet des Nutzers. Der Key wird nicht veraendert.
+async function setup(request, env, name) {
+  const key = cleanKey(request.headers.get("X-License"));
+  if (!/^[A-Za-z0-9._-]{1,80}$/.test(name) || !key || key.length > 64) return J({ error: "ungueltige_anfrage" }, 400);
+  const raw = await env.LIC.get("key:" + key);
+  if (!raw) return J({ error: "key_unbekannt" }, 403);
+  const e = JSON.parse(raw);
+  if (e.revoked) return J({ error: "gesperrt" }, 403);
+  if (e.hours && e.start && Date.now() > Date.parse(e.start) + e.hours * 3600000) return J({ error: "abgelaufen" }, 403);
+  const body = await env.LIC.get("setup:" + name);
+  if (!body) return J({ error: "setup_fehlt" }, 404);
+  return new Response(body, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" } });
+}
+
 async function admin(request, env) {
   if (!env.ADMIN_PW) return J({ error: "Admin-Passwort ist auf dem Server noch nicht gesetzt." }, 503);
   const [want, got] = await Promise.all([sha("pw:" + env.ADMIN_PW), sha("pw:" + (request.headers.get("X-Admin") || ""))]);
@@ -140,6 +156,7 @@ export default {
       return new Response(PAGE, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", "X-Frame-Options": "DENY" } });
     }
     if (request.method === "POST" && url.pathname === "/verify") return verify(request, env);
+    if (request.method === "GET" && url.pathname.startsWith("/setup/")) return setup(request, env, url.pathname.slice(7));
     if (request.method === "POST" && url.pathname === "/api") return admin(request, env);
     return J({ error: "nicht gefunden" }, 404);
   },

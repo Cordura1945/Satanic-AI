@@ -81,9 +81,9 @@ struct RunPod {
         return "\"\""
     }
 
-    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false) -> String {
+    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false, lic: String = "") -> String {
         let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
-        let devEnv = dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : ""
+        let devEnv = (dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : "") + ",{key:" + q("LICENSE_KEY") + ",value:" + q(lic) + "}"
         let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}\(devEnv)]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
@@ -186,7 +186,7 @@ final class Model: ObservableObject {
         if !u.bool(forKey: "gpusV3") { u.set(gl, forKey: "gpus"); u.set(true, forKey: "gpusV3") }
         gpus = u.string(forKey: "gpus") ?? gl
         maxPrice = u.object(forKey: "maxPrice") as? Double ?? 0.60
-        devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 2.20
+        devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 1.25
         mode = u.string(forKey: "mode") ?? "demand"
         volGB = u.object(forKey: "volGB") as? Int ?? 60
         dc = u.string(forKey: "dc") ?? "EU-RO-1"
@@ -490,6 +490,7 @@ final class Model: ObservableObject {
             }
         }
         let dev = mode == "dev"
+        let licKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         let limit = dev ? devMaxPrice : maxPrice
         let list: [String] = dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
         for entry in (apiKey.isEmpty ? [] : list) {
@@ -497,13 +498,17 @@ final class Model: ObservableObject {
             let g = n == 2 ? String(entry.dropFirst(3)) : entry
             message = "Versuche \(entry)…"
             do {
-                let m = RunPod.deployMutation(gpu: g, image: image, disk: dev ? max(disk, 80) : disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev)
+                let m = RunPod.deployMutation(gpu: g, image: image, disk: dev ? max(disk, 80) : disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, lic: licKey)
                 let (d, err) = try await RunPod(key: apiKey).gql(m)
                 if let p = d["podFindAndDeployOnDemand"] as? [String: Any], let id = p["id"] as? String {
                     let c = (p["costPerHr"] as? NSNumber)?.doubleValue ?? 0
                     if limit > 0 && c > limit {
                         _ = try? await RunPod(key: apiKey).gql("mutation{podTerminate(input:{podId:\(RunPod.q(id))})}")
-                        errs.append("\(g): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
+                        errs.append("\(entry): $\(String(format: "%.2f", c))/h > Limit, Pod wieder beendet")
+                        if dev {
+                            message = "Dev-Server: Die günstigste freie GPU (\(entry)) kostet $\(String(format: "%.2f", c))/h und liegt über deinem Limit von $\(String(format: "%.2f", limit))/h. Später erneut versuchen oder das Dev-Preislimit in den Einstellungen erhöhen."
+                            return
+                        }
                         continue
                     }
                     podId = id
@@ -535,7 +540,7 @@ final class Model: ObservableObject {
                                 "order": [["dph_total", "asc"]], "type": "on-demand", "limit": 8]
         if maxPrice > 0 { q["dph_total"] = ["lte": maxPrice] }
         let onstart = "mkdir -p /workspace\necho \"$SETUP_B64\" | base64 -d | gunzip > /workspace/setup_all.sh\ncd /workspace\nnohup bash setup_all.sh > /workspace/setup.log 2>&1 &\n"
-        let env: [String: Any] = ["HF_TOKEN": hfToken, "AUTO_STOP_H": String(autoStop), "IDLE_STOP_MIN": String(idleStop), "SETUP_B64": b64, "-p 8000:8000": "1"]
+        let env: [String: Any] = ["HF_TOKEN": hfToken, "AUTO_STOP_H": String(autoStop), "IDLE_STOP_MIN": String(idleStop), "SETUP_B64": b64, "LICENSE_KEY": licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(), "-p 8000:8000": "1"]
         do {
             let (code, o) = try await v.req("POST", "/bundles/", q)
             let offers = o["offers"] as? [[String: Any]] ?? []
@@ -960,7 +965,7 @@ struct ContentView: View {
                 modeCard("volume", "Network Volume",
                          "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\((m.volId != nil && !m.volDC.isEmpty) ? m.volDC : m.dc)).")
                 modeCard("dev", "Dev-Server",
-                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ca. $1.20–2.20 pro Stunde, eigenes Preislimit in den Einstellungen.")
+                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Lädt bei jedem Start alles neu (ca. 15–30 Min). Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.")
                 if m.mode == "volume" {
                     Card {
                         if m.volId != nil {

@@ -49,4 +49,5 @@ jobs:
         echo "Lizenz-Server: $URL"
         echo "Verwaltung:    $URL/admin"
         curl -s -m 20 "$URL/health" || true
+        echo; echo "Setup-Abruf ohne Key (erwartet 400): $(curl -s -m 20 -o /dev/null -w '%{http_code}' "$URL/setup/main")"
         { echo "### Lizenz-Server"; echo "Adresse: $URL"; echo "Verwaltung: $URL/admin"; } >> "$GITHUB_STEP_SUMMARY"
