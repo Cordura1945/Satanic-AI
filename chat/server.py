@@ -2379,6 +2379,7 @@ class H(BaseHTTPRequestHandler):
                 try: http("GET", url, timeout=3); st[n] = True
                 except Exception: st[n] = False
             st["idle_left"] = idle_left()
+            if IMG: st["llm"] = st["fast"] = True   # Bild-Server braucht kein LLM
             return self._send(200, st)
         self._send(404, {"error": "nicht gefunden"})
     def _stream(self, jid, j, i):

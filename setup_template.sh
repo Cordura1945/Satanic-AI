@@ -124,7 +124,7 @@ if IMG:
     except Exception as e: print("FEHLER qwen-edit", type(e).__name__, str(e)[:160])
     for path in ("split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "split_files/vae/qwen_image_vae.safetensors"):
         dest = B + ("text_encoders" if "text_encoders" in path else "vae")
-        try: _mv("Comfy-Org/Qwen-Image-Edit_ComfyUI", path, dest)
+        try: _mv("Comfy-Org/Qwen-Image_ComfyUI", path, dest)
         except Exception as e: print("FEHLER", path.split("/")[-1], type(e).__name__, str(e)[:160])
     raise SystemExit
 jobs = [
