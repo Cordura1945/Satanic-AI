@@ -219,7 +219,19 @@ def graph_edit(prompt, comfy_names, seed, lora=None):
     return g, "99"
 
 def run_comfy(graph, out_node):
-    r = json.loads(http("POST", COMFY + "/prompt", json.dumps({"prompt": graph, "client_id": "chatapp"}).encode(), {"Content-Type": "application/json"}))
+    try:
+        r = json.loads(http("POST", COMFY + "/prompt", json.dumps({"prompt": graph, "client_id": "chatapp"}).encode(), {"Content-Type": "application/json"}))
+    except urllib.error.HTTPError as e:
+        # ComfyUI schickt bei 400 den genauen Grund mit (z. B. fehlende Modelldatei) - den zeigen statt nur "Bad Request"
+        try: b = json.loads(e.read().decode("utf-8", "ignore"))
+        except Exception: b = {}
+        msgs = []
+        er = b.get("error") or {}
+        if isinstance(er, dict) and er.get("message"): msgs.append((er.get("message", "") + " " + str(er.get("details", ""))).strip())
+        for nid, ne in (b.get("node_errors") or {}).items():
+            for x in ne.get("errors", []):
+                msgs.append("%s: %s %s" % (ne.get("class_type", nid), x.get("message", ""), x.get("details", "")))
+        raise RuntimeError("ComfyUI lehnt ab: " + ("; ".join(m.strip() for m in msgs if m.strip()) or "HTTP %d" % e.code)[:600])
     if r.get("node_errors"):
         raise RuntimeError("ComfyUI Fehler: " + json.dumps(r["node_errors"])[:400])
     pid = r["prompt_id"]; t0 = time.time()

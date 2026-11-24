@@ -60,6 +60,8 @@ echo "=== 1/5 ComfyUI installieren ==="
 cd /workspace || exit 1
 # Dev-Server (DEV_SERVER=1): ohne Bildteil, mit grossem Programmier-Modell
 DEV=0; [ "$DEV_SERVER" = "1" ] && DEV=1
+# Bild-Server (IMG_SERVER=1): nur ComfyUI + Qwen-Image-Edit, kein LLM
+IMG=0; [ "$IMG_SERVER" = "1" ] && IMG=1
 if [ "$DEV" = "0" ]; then
 [ -d ComfyUI ] || git clone https://github.com/comfyanonymous/ComfyUI
 cd ComfyUI || exit 1
@@ -104,6 +106,7 @@ EOF_HTML
 
 echo "=== 2/5 Modelle laden (ca. 37 GB) ==="
 mkdir -p /workspace/models/llm models/upscale_models
+export PYTHONUNBUFFERED=1
 python - <<'PY'
 import os, shutil
 from huggingface_hub import hf_hub_download as d
@@ -111,11 +114,29 @@ tok = os.environ["HF_TOKEN"]
 B = "/workspace/ComfyUI/models/"
 IMG = os.environ.get("IMG_SERVER") == "1"
 if IMG:
+    import subprocess, sys, time
     from huggingface_hub import list_repo_files
     def _mv(repo, path, dest, flat=None):
+        # Jeder Download in eigenem Prozess mit Zeitlimit: ein haengender Download kann den Start nicht mehr blockieren
+        name = flat or os.path.basename(path); target = os.path.join(dest, name)
         os.makedirs(dest, exist_ok=True)
-        p = d(repo, path, local_dir="/tmp/qdl", token=tok)
-        shutil.move(p, os.path.join(dest, flat or os.path.basename(path))); print("OK    ", flat or os.path.basename(path))
+        if os.path.exists(target) and os.path.getsize(target) > 1000000:
+            print("OK     " + name + " vorhanden"); return True
+        code = ("import os,shutil;from huggingface_hub import hf_hub_download as d;"
+                "p=d(%r,%r,local_dir='/tmp/qdl',token=os.environ['HF_TOKEN']);shutil.move(p,%r)" % (repo, path, target))
+        for i in range(1, 4):
+            env = dict(os.environ, HF_HUB_DOWNLOAD_TIMEOUT="60")
+            if i == 3: env["HF_HUB_DISABLE_XET"] = "1"  # letzter Versuch ohne Xet-Download
+            print("LADE   %s (Versuch %d/3)" % (name, i))
+            try:
+                r = subprocess.run([sys.executable, "-c", code], env=env, timeout=1800, capture_output=True, text=True)
+                if r.returncode == 0 and os.path.exists(target):
+                    print("OK     " + name); return True
+                print("HINWEIS %s: %s" % (name, (r.stderr or "").strip().splitlines()[-1:] or "unbekannt"))
+            except subprocess.TimeoutExpired:
+                print("HINWEIS %s: Zeitlimit (30 Min) ueberschritten" % name)
+            time.sleep(5 * i)
+        print("FEHLER " + name + " konnte nicht geladen werden"); return False
     try:
         fs = [f for f in list_repo_files("unsloth/Qwen-Image-Edit-2511-GGUF", token=tok) if f.lower().endswith(".gguf")]
         q = ([f for f in fs if "q8_0" in f.lower()] or [f for f in fs if "q6_k" in f.lower()] or [f for f in fs if "q5_k" in f.lower()] or fs)
@@ -123,9 +144,14 @@ if IMG:
         else: print("FEHLER: kein Qwen-Edit-GGUF im Repo gefunden")
     except Exception as e: print("FEHLER qwen-edit", type(e).__name__, str(e)[:160])
     for path in ("split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "split_files/vae/qwen_image_vae.safetensors"):
-        dest = B + ("text_encoders" if "text_encoders" in path else "vae")
-        try: _mv("Comfy-Org/Qwen-Image_ComfyUI", path, dest)
-        except Exception as e: print("FEHLER", path.split("/")[-1], type(e).__name__, str(e)[:160])
+        _mv("Comfy-Org/Qwen-Image_ComfyUI", path, B + ("text_encoders" if "text_encoders" in path else "vae"))
+    # Abschluss-Kontrolle: fehlt etwas, steht es klar im Log
+    need = [B + "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", B + "vae/qwen_image_vae.safetensors"]
+    miss = [os.path.basename(f) for f in need if not os.path.exists(f)]
+    try:
+        if not [f for f in os.listdir(B + "diffusion_models") if "qwen-image-edit-2511" in f.lower()]: miss.append("qwen-image-edit-2511 (GGUF)")
+    except Exception: miss.append("qwen-image-edit-2511 (GGUF)")
+    print("FEHLT: " + ", ".join(miss) if miss else "OK     alle Bild-Modelle vorhanden")
     raise SystemExit
 jobs = [
  ("unsloth/FLUX.2-klein-9B-GGUF", "flux-2-klein-9b-Q8_0.gguf", B+"diffusion_models"),
@@ -167,7 +193,7 @@ except Exception as e:
     print("FEHLER mmproj", type(e).__name__, str(e)[:160])
 PY
 
-[ "$DEV" = "1" ] || python3 - <<'PY2'
+[ "$DEV" = "1" ] || [ "$IMG" = "1" ] || python3 - <<'PY2'
 import os
 from huggingface_hub import hf_hub_download as d, list_repo_files
 tok=os.environ.get("HF_TOKEN") or None
@@ -188,7 +214,10 @@ PY2
 echo "=== 3/5 llama.cpp bauen (5-10 Minuten) ==="
 cd /workspace
 export PATH=/usr/local/cuda/bin:$PATH
-if ! command -v nvcc >/dev/null 2>&1; then
+if [ "$IMG" = "1" ]; then
+  echo "Bild-Server: kein LLM noetig, Schritt uebersprungen."
+  LLM_OK=0
+elif ! command -v nvcc >/dev/null 2>&1; then
   echo "WARNUNG: nvcc (CUDA-Compiler) nicht gefunden. LLM-Teil wird uebersprungen. ComfyUI laeuft trotzdem."
   LLM_OK=0
 else
