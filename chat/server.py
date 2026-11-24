@@ -153,11 +153,14 @@ def graph_t2i(prompt, w, h, upscale, seed, lora=0.8):
     g["99"] = {"class_type": "SaveImage", "inputs": {"images": last, "filename_prefix": "chat"}}
     return g, "99"
 
-def graph_qwen_edit(prompt, comfy_names, seed, steps=20, cfg=4.0):
-    """Bild bearbeiten mit Qwen-Image-Edit-2511 (bis zu 3 Referenzbilder). Volle Qualitaet, 20 Schritte."""
+def graph_qwen_edit(prompt, comfy_names, seed, steps=40, cfg=4.0):
+    """Bild bearbeiten mit Qwen-Image-Edit-2511 (bis zu 3 Referenzbilder), aufgebaut wie die offizielle ComfyUI-Vorlage."""
     unet = QUNET or _find_qunet()
     g = {
      "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}},
+     # Sampling-Verschiebung und CFG-Normierung wie in der offiziellen 2511-Vorlage
+     "2": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.1}},
+     "7": {"class_type": "CFGNorm", "inputs": {"model": ["2", 0], "strength": 1.0}},
      "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": QCLIP, "type": "qwen_image"}},
      "4": {"class_type": "VAELoader", "inputs": {"vae_name": QVAE}},
     }
@@ -171,10 +174,11 @@ def graph_qwen_edit(prompt, comfy_names, seed, steps=20, cfg=4.0):
         inp = {"clip": ["3", 0], "vae": ["4", 0], "prompt": text}
         for n, r in enumerate(refs): inp[f"image{n+1}"] = r
         g[nid] = {"class_type": "TextEncodeQwenImageEditPlus", "inputs": inp}
+        # 2511 braucht diese Referenz-Methode; GGUF-Dateien setzen sie nicht automatisch
+        g[nid + "r"] = {"class_type": "FluxKontextMultiReferenceLatentMethod", "inputs": {"conditioning": [nid, 0], "reference_latents_method": "index_timestep_zero"}}
     tenc("5", prompt); tenc("6", "")
-    g["30"] = {"class_type": "GetImageSize", "inputs": {"image": refs[0]}}
-    g["35"] = {"class_type": "EmptySD3LatentImage", "inputs": {"width": ["30", 0], "height": ["30", 1], "batch_size": 1}}
-    g["36"] = {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["6", 0],
+    g["35"] = {"class_type": "VAEEncode", "inputs": {"pixels": refs[0], "vae": ["4", 0]}}
+    g["36"] = {"class_type": "KSampler", "inputs": {"model": ["7", 0], "positive": ["5r", 0], "negative": ["6r", 0],
                "latent_image": ["35", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}}
     g["37"] = {"class_type": "VAEDecode", "inputs": {"samples": ["36", 0], "vae": ["4", 0]}}
     g["99"] = {"class_type": "SaveImage", "inputs": {"images": ["37", 0], "filename_prefix": "chat"}}
