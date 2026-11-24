@@ -108,10 +108,19 @@ def http(method, url, data=None, headers=None, timeout=600):
 
 def comfy_upload(i):
     data = open(img_path(i), "rb").read()
-    name = i + ".jpg"; b = uuid.uuid4().hex
+    name = i + ".jpg"
+    # ComfyUI laeuft auf demselben Pod: Bild direkt in den input-Ordner legen statt per HTTP hochladen
+    inp = os.environ.get("COMFY_INPUT", "/workspace/ComfyUI/input")
+    if os.path.isdir(inp):
+        open(os.path.join(inp, name), "wb").write(data)
+        return name
+    b = uuid.uuid4().hex
     body = (f"--{b}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{name}\"\r\nContent-Type: image/jpeg\r\n\r\n").encode() + data + \
            (f"\r\n--{b}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue\r\n--{b}--\r\n").encode()
-    r = json.loads(http("POST", COMFY + "/upload/image", body, {"Content-Type": "multipart/form-data; boundary=" + b}))
+    try:
+        r = json.loads(http("POST", COMFY + "/upload/image", body, {"Content-Type": "multipart/form-data; boundary=" + b}))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError("Bild-Upload an ComfyUI abgelehnt (HTTP %d): %s" % (e.code, e.read().decode("utf-8", "ignore")[:300]))
     return r["name"]
 
 def snap16(v, d=1024):
@@ -156,7 +165,7 @@ def graph_qwen_edit(prompt, comfy_names, seed, steps=20, cfg=4.0):
     for n, nm in enumerate(comfy_names[:3]):
         li, sc = f"1{n}0", f"1{n}1"
         g[li] = {"class_type": "LoadImage", "inputs": {"image": nm}}
-        g[sc] = {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": [li, 0], "upscale_method": "lanczos", "megapixels": 1.0}}
+        g[sc] = {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": [li, 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1}}
         refs.append([sc, 0])
     def tenc(nid, text):
         inp = {"clip": ["3", 0], "vae": ["4", 0], "prompt": text}
