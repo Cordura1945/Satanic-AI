@@ -64,6 +64,13 @@ html.dz #fxbg{background:radial-gradient(60% 42% at 50% 15%,rgba(24,140,50,.32),
 html.dz header b{white-space:nowrap;font-size:12px;letter-spacing:0;text-shadow:0 0 10px rgba(52,199,89,.4)}
 html.dz header .av{box-shadow:0 0 10px rgba(52,199,89,.4)}
 html.dz #go{background:#1f9a40;border-color:#34c759;box-shadow:0 0 12px rgba(52,199,89,.4)}
+html.imgsrv{--ac:#3b82f6}
+html.imgsrv #boot{display:none}
+html.imgsrv #fxbg{background:radial-gradient(60% 42% at 50% 15%,rgba(40,90,200,.3),rgba(10,24,60,.1) 55%,transparent 100%),radial-gradient(52% 32% at 50% 100%,rgba(30,70,160,.22),transparent 100%)}
+html.imgsrv header b{white-space:nowrap;font-size:12px;letter-spacing:0;text-shadow:0 0 10px rgba(59,130,246,.45)}
+html.imgsrv header .av{box-shadow:0 0 10px rgba(59,130,246,.45)}
+html.imgsrv #st{color:#7fb0ff}
+html.imgsrv #go{background:#2563eb;border-color:#3b82f6;box-shadow:0 0 12px rgba(59,130,246,.45)}
 html,body{background:#0a0a0d}
 #app{background:transparent;position:relative;z-index:1}
 #fxbg{position:fixed;inset:0;z-index:0;pointer-events:none;
@@ -212,8 +219,8 @@ function setTheme(t,save){document.documentElement.dataset.theme=t;$('#th').text
 setTheme(localStorage.getItem('theme')||'dark',false);
 $('#th').onclick=()=>setTheme(document.documentElement.dataset.theme==='light'?'dark':'light',true);
 fetch('/api/prefs').then(r=>r.json()).then(p=>{if(p&&p.theme)setTheme(p.theme,false)}).catch(()=>{});
-const DZ=document.documentElement.classList.contains('dz');if(DZ)document.querySelector('header b').textContent='satanic dev';
-const GREETING=DZ?'Willkommen in der Satanic Dev Zone. Was bauen wir heute? 😈':'Hi! Ich bin Satanic, deine unzensierte KI. Was kann ich heute für dich tun? 😈';
+const DZ=document.documentElement.classList.contains('dz');const IMG=document.documentElement.classList.contains('imgsrv');if(DZ)document.querySelector('header b').textContent='satanic dev';if(IMG)document.querySelector('header b').textContent='satanic bild';
+const GREETING=IMG?'Lade ein Bild hoch und schreib, was geaendert werden soll – ich bearbeite es. 🖤':DZ?'Willkommen in der Satanic Dev Zone. Was bauen wir heute? 😈':'Hi! Ich bin Satanic, deine unzensierte KI. Was kann ich heute für dich tun? 😈';
 function spkText(t){return t.replace(/```[\s\S]*?```/g,' (Code-Block) ').replace(/[*`#_>]/g,'').replace(/\[(Erzeugte|Erstellte)[^\]]*\]/g,'')}
 function speak(t){if(!window.speechSynthesis)return;speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(spkText(t));u.lang='de-DE';speechSynthesis.speak(u)}
 function render(){setTimeout(ctxUpd,0);
@@ -228,7 +235,7 @@ function render(){setTimeout(ctxUpd,0);
     if(m.role==='assistant'&&m.images)m.images.forEach(x=>d.appendChild(imgTag(x)));
     if(m.role==='assistant'&&m.files)m.files.forEach(f=>d.appendChild(fileTag(f)));
   }scroll()}
-async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(DZ?'DEV ✓':s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
+async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(IMG?(s.comfy?'Bild ✓':'Bild lädt …'):(s.llm?'LLM ✓ ':'LLM … ')+(DZ?'DEV ✓':s.comfy?'Bild ✓':'Bild …'))+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
 status();setInterval(status,15000);
 
 function loadImg(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
@@ -439,7 +446,7 @@ render();
 </script><script>
 (function(){
  var boot=document.getElementById('boot'); if(!boot) return;
- if(document.documentElement.classList.contains('dz')){ if(boot.parentNode) boot.parentNode.removeChild(boot); return; }
+ if(document.documentElement.classList.contains('dz')||document.documentElement.classList.contains('imgsrv')){ if(boot.parentNode) boot.parentNode.removeChild(boot); return; }
  try{ if(sessionStorage.getItem('booted')==='1'){ if(boot.parentNode) boot.parentNode.removeChild(boot); return; } }catch(e){}
  var log=boot.querySelector('.log'); var started=false;
  function sleep(ms){return new Promise(function(r){setTimeout(r,ms);});}

@@ -28,7 +28,7 @@ def calc(text):
     if "Chat-App starten" in text: st = 6
     frac = 0.0
     if st == 2:
-        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / (48.6e9 if os.environ.get("DEV_SERVER") == "1" else 37e9), 1.0)
+        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / (48.6e9 if os.environ.get("DEV_SERVER") == "1" else (31e9 if os.environ.get("IMG_SERVER") == "1" else 37e9)), 1.0)
     if st == 3:
         try:
             ms = re.findall(r"\[\s*(\d+)%\]", open("/tmp/build.log", errors="ignore").read())
@@ -109,6 +109,24 @@ import os, shutil
 from huggingface_hub import hf_hub_download as d
 tok = os.environ["HF_TOKEN"]
 B = "/workspace/ComfyUI/models/"
+IMG = os.environ.get("IMG_SERVER") == "1"
+if IMG:
+    from huggingface_hub import list_repo_files
+    def _mv(repo, path, dest, flat=None):
+        os.makedirs(dest, exist_ok=True)
+        p = d(repo, path, local_dir="/tmp/qdl", token=tok)
+        shutil.move(p, os.path.join(dest, flat or os.path.basename(path))); print("OK    ", flat or os.path.basename(path))
+    try:
+        fs = [f for f in list_repo_files("unsloth/Qwen-Image-Edit-2511-GGUF", token=tok) if f.lower().endswith(".gguf")]
+        q = ([f for f in fs if "q8_0" in f.lower()] or [f for f in fs if "q6_k" in f.lower()] or [f for f in fs if "q5_k" in f.lower()] or fs)
+        if q: _mv("unsloth/Qwen-Image-Edit-2511-GGUF", q[0], B + "diffusion_models")
+        else: print("FEHLER: kein Qwen-Edit-GGUF im Repo gefunden")
+    except Exception as e: print("FEHLER qwen-edit", type(e).__name__, str(e)[:160])
+    for path in ("split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "split_files/vae/qwen_image_vae.safetensors"):
+        dest = B + ("text_encoders" if "text_encoders" in path else "vae")
+        try: _mv("Comfy-Org/Qwen-Image-Edit_ComfyUI", path, dest)
+        except Exception as e: print("FEHLER", path.split("/")[-1], type(e).__name__, str(e)[:160])
+    raise SystemExit
 jobs = [
  ("unsloth/FLUX.2-klein-9B-GGUF", "flux-2-klein-9b-Q8_0.gguf", B+"diffusion_models"),
  ("ponpoke/flux2-klein-9b-uncensored-text-encoder", "flux2-klein-9b-uncensored-q8_0.gguf", B+"text_encoders"),

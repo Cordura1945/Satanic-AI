@@ -13,6 +13,7 @@
 - license/: Lizenz-Server (worker.js), seine Einstellungen und config.json mit der Server-Adresse. Test: "node tools/license_test.mjs".
 - web/: alter Stand, wird nicht gebaut. Nicht aendern.
 - Dev-Server: eigene Startart in beiden Starter-Apps (mode "dev"). Der Pod bekommt DEV_SERVER=1. Dann laedt setup_template.sh nur das Programmier-Modell (kein Bildteil), chat/server.py setzt die Klasse "dz" ans html-Element, und chat/index.html zeigt damit das gruene Aussehen (Regeln "html.dz ...") und oeffnet den Dev-Dialog von selbst.
+- Bild-Server: eigene Startart (mode "img", env IMG_SERVER=1). Der Pod laedt nur Qwen-Image-Edit-2511 (GGUF) + Text-Encoder + VAE, kein LLM. chat/server.py baut den Qwen-Edit-Graphen (graph_qwen_edit) und hat im Bild-Server-Modus einen direkten Bearbeiten-Pfad ohne LLM; die Oberflaeche traegt die Klasse "imgsrv" (blau). Einzelne 48-GB-GPU reicht. ComfyUI-Graph ist noch nicht auf einem echten Pod getestet.
 - Dev-Volume: Der Dev-Server kann ein eigenes Network Volume "ki-dev-vol" nutzen (Schalter in den Starter-Apps). Das normale Volume heisst "ki-chat-vol". Beide werden ueber den Namen gefunden.
 - Vorschau (Werkzeug preview): Der Chat-Server liefert Projektdateien nur ueber einen geheimen Link und abgeschottet aus (Kopfzeile Content-Security-Policy: sandbox). Das nicht aufweichen, sonst kann eine Vorschau-Seite das Dev-Passwort lesen.
 - devzone.mp4 (Hochformat) und devzone_wide.mp4 (Querformat, fuer breite Fenster): Intro "Satanic Dev Zone". Laeuft in den Starter-Apps beim ersten Oeffnen des Chats auf dem Dev-Server.

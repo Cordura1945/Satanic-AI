@@ -82,9 +82,9 @@ struct RunPod {
         return "\"\""
     }
 
-    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false, lic: String = "") -> String {
+    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false, img: Bool = false, lic: String = "") -> String {
         let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
-        let devEnv = (dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : "") + ",{key:" + q("LICENSE_KEY") + ",value:" + q(lic) + "}"
+        let devEnv = (dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : "") + (img ? ",{key:" + q("IMG_SERVER") + ",value:" + q("1") + "}" : "") + ",{key:" + q("LICENSE_KEY") + ",value:" + q(lic) + "}"
         let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}\(devEnv)]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
@@ -130,6 +130,7 @@ final class Model: ObservableObject {
     @Published var volDC = ""
     @Published var maxPrice: Double { didSet { UserDefaults.standard.set(maxPrice, forKey: "maxPrice") } }
     @Published var devMaxPrice: Double { didSet { UserDefaults.standard.set(devMaxPrice, forKey: "devMaxPrice") } }
+    @Published var imgMaxPrice: Double { didSet { UserDefaults.standard.set(imgMaxPrice, forKey: "imgMaxPrice") } }
     // Dev-Server mit eigenem Network Volume "ki-dev-vol" (Modell und Projekte bleiben gespeichert)
     @Published var devVol: Bool { didSet { UserDefaults.standard.set(devVol, forKey: "devVol") } }
     @Published var devVolGB: Int { didSet { UserDefaults.standard.set(devVolGB, forKey: "devVolGB") } }
@@ -137,6 +138,8 @@ final class Model: ObservableObject {
     @Published var devVolId: String? = nil
     @Published var devVolInfo = ""
     // Dev-Server: zuerst zwei 48-GB-GPUs, sonst eine 80-GB-GPU. "2x " heisst zwei GPUs im Pod.
+    // Bild-Server: eine einzelne 48-GB-GPU reicht (Qwen-Image-Edit), 80-GB als Ausweichloesung
+    static let imgGpus: [String] = ["NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA L40", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
     static let devGpus: [String] = ["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"]
 
     @Published var balance: Double? = nil
@@ -194,6 +197,7 @@ final class Model: ObservableObject {
         gpus = u.string(forKey: "gpus") ?? gl
         maxPrice = u.object(forKey: "maxPrice") as? Double ?? 0.60
         devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 1.25
+        imgMaxPrice = u.object(forKey: "imgMaxPrice") as? Double ?? 0.80
         devVol = u.bool(forKey: "devVol")
         devVolGB = u.object(forKey: "devVolGB") as? Int ?? 60
         devDc = u.string(forKey: "devDc") ?? "EU-RO-1"
@@ -580,10 +584,11 @@ final class Model: ObservableObject {
             }
         }
         let dev = mode == "dev"
+        let img = mode == "img"
         var over: [String] = []
         let licKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let limit = dev ? devMaxPrice : maxPrice
-        let list: [String] = dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let limit = img ? imgMaxPrice : (dev ? devMaxPrice : maxPrice)
+        let list: [String] = img ? Model.imgGpus : (dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         for entry in (apiKey.isEmpty ? [] : list) {
             let n = entry.hasPrefix("2x ") ? 2 : 1
             let g = n == 2 ? String(entry.dropFirst(3)) : entry
@@ -593,7 +598,7 @@ final class Model: ObservableObject {
             }
             message = "Versuche \(entry)…"
             do {
-                let m = RunPod.deployMutation(gpu: g, image: image, disk: dev ? max(disk, 80) : disk, hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, lic: licKey)
+                let m = RunPod.deployMutation(gpu: g, image: image, disk: img ? max(disk, 60) : (dev ? max(disk, 80) : disk), hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, img: img, lic: licKey)
                 let (d, err) = try await RunPod(key: apiKey).gql(m)
                 if let p = d["podFindAndDeployOnDemand"] as? [String: Any], let id = p["id"] as? String {
                     let c = (p["costPerHr"] as? NSNumber)?.doubleValue ?? 0
@@ -616,7 +621,7 @@ final class Model: ObservableObject {
                 errs.append("\(g): \(error.localizedDescription)")
             }
         }
-        if !vastKey.isEmpty && !dev {
+        if !vastKey.isEmpty && !dev && !img {
             await startVast(b64: b64, errs: errs)
             return
         }
@@ -1038,6 +1043,7 @@ struct ContentView: View {
                 SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
                 Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
                 Stepper("Max. Preis Dev-Server: $\(String(format: "%.2f", m.devMaxPrice))/h", value: $m.devMaxPrice, in: 0...6, step: 0.05)
+                Stepper("Max. Preis Bild-Server: $\(String(format: "%.2f", m.imgMaxPrice))/h", value: $m.imgMaxPrice, in: 0...4, step: 0.05)
                 Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
                 Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
                 Stepper("Disk: \(m.disk) GB", value: $m.disk, in: 60...300, step: 10)
@@ -1061,6 +1067,8 @@ struct ContentView: View {
                          "Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.")
                 modeCard("volume", "Network Volume",
                          "Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $\(volMonth) pro Monat (\(m.volGB) GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (\((m.volId != nil && !m.volDC.isEmpty) ? m.volDC : m.dc)).")
+                modeCard("img", "Bild-Server",
+                         "Eigener Server nur zum Bilder-Bearbeiten: bestes offenes Modell (Qwen-Image-Edit) auf einer 48-GB-GPU, blauer Bild-Chat, ohne Chat-Teil. Bild hochladen, sagen was anders soll, fertiges Bild kommt zurück. Lädt bei jedem Start neu (ca. 10–20 Min). Kostet ab ca. $0.59 pro Stunde, eigenes Preislimit ($0.80) in den Einstellungen.")
                 modeCard("dev", "Dev-Server",
                          "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Ohne Volume lädt jeder Start alles neu (ca. 15–30 Min), mit eigenem Dev-Volume nur der erste. Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.")
                 if m.mode == "dev" {

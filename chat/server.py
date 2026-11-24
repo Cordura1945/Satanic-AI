@@ -45,6 +45,11 @@ UNET = "flux-2-klein-9b-Q8_0.gguf"
 CLIP = "flux2-klein-9b-uncensored-q8_0.gguf"
 VAE = "flux2-vae.safetensors"
 LORA = "Flux Klein - NSFW v2.safetensors"
+IMG = os.environ.get("IMG_SERVER") == "1"  # Bild-Server: nur Bildbearbeitung (Qwen-Image-Edit), kein LLM
+QUNET_RX = "qwen-image-edit-2511"   # GGUF-Diffusionsmodell (Dateiname wird beim Start gesucht)
+QUNET = os.environ.get("QUNET", "")  # vom Setup gesetzt: tatsaechlicher GGUF-Dateiname
+QCLIP = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
+QVAE = "qwen_image_vae.safetensors"
 UPS = "4x-UltraSharp.safetensors"
 
 SYSTEM = (
@@ -138,6 +143,44 @@ def graph_t2i(prompt, w, h, upscale, seed, lora=0.8):
         last = ["15", 0]
     g["99"] = {"class_type": "SaveImage", "inputs": {"images": last, "filename_prefix": "chat"}}
     return g, "99"
+
+def graph_qwen_edit(prompt, comfy_names, seed, steps=20, cfg=4.0):
+    """Bild bearbeiten mit Qwen-Image-Edit-2511 (bis zu 3 Referenzbilder). Volle Qualitaet, 20 Schritte."""
+    unet = QUNET or _find_qunet()
+    g = {
+     "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": unet}},
+     "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": QCLIP, "type": "qwen_image"}},
+     "4": {"class_type": "VAELoader", "inputs": {"vae_name": QVAE}},
+    }
+    refs = []
+    for n, nm in enumerate(comfy_names[:3]):
+        li, sc = f"1{n}0", f"1{n}1"
+        g[li] = {"class_type": "LoadImage", "inputs": {"image": nm}}
+        g[sc] = {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": [li, 0], "upscale_method": "lanczos", "megapixels": 1.0}}
+        refs.append([sc, 0])
+    def tenc(nid, text):
+        inp = {"clip": ["3", 0], "vae": ["4", 0], "prompt": text}
+        for n, r in enumerate(refs): inp[f"image{n+1}"] = r
+        g[nid] = {"class_type": "TextEncodeQwenImageEditPlus", "inputs": inp}
+    tenc("5", prompt); tenc("6", "")
+    g["30"] = {"class_type": "GetImageSize", "inputs": {"image": refs[0]}}
+    g["35"] = {"class_type": "EmptySD3LatentImage", "inputs": {"width": ["30", 0], "height": ["30", 1], "batch_size": 1}}
+    g["36"] = {"class_type": "KSampler", "inputs": {"model": ["1", 0], "positive": ["5", 0], "negative": ["6", 0],
+               "latent_image": ["35", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}}
+    g["37"] = {"class_type": "VAEDecode", "inputs": {"samples": ["36", 0], "vae": ["4", 0]}}
+    g["99"] = {"class_type": "SaveImage", "inputs": {"images": ["37", 0], "filename_prefix": "chat"}}
+    return g, "99"
+
+_QUNET_CACHE = [None]
+def _find_qunet():
+    if _QUNET_CACHE[0]: return _QUNET_CACHE[0]
+    d = "/workspace/ComfyUI/models/diffusion_models"
+    try:
+        c = sorted(f for f in os.listdir(d) if QUNET_RX in f.lower() and f.lower().endswith(".gguf"))
+    except Exception:
+        c = []
+    _QUNET_CACHE[0] = c[0] if c else "qwen-image-edit-2511.gguf"
+    return _QUNET_CACHE[0]
 
 def graph_edit(prompt, comfy_names, seed, lora=None):
     g = {
@@ -847,14 +890,17 @@ def tool_edit(args, opts=None):
     prompt = str(args.get("prompt", "")).strip()
     ids = args.get("image_ids") or []
     if isinstance(ids, str): ids = [ids]
-    ids = [x for x in ids if isinstance(x, str)][:2]
+    ids = [x for x in ids if isinstance(x, str)][:3 if IMG else 2]
     if not prompt or not ids: raise ValueError("prompt oder image_ids fehlen")
     for x in ids:
         if not os.path.exists(img_path(x)): raise ValueError("unbekannte Bild-ID " + x)
     with gpu_lock:
         names = [comfy_upload(x) for x in ids]
-        lo = str((opts or {}).get("lora") or "")
-        g, o = graph_edit(prompt, names, random.randint(0, 2**50), 0.0 if (lo == "off" or not EDIT_LORA) else (0.4 if lo == "low" else 0.8))
+        if IMG:
+            g, o = graph_qwen_edit(prompt, names, random.randint(0, 2**50))
+        else:
+            lo = str((opts or {}).get("lora") or "")
+            g, o = graph_edit(prompt, names, random.randint(0, 2**50), 0.0 if (lo == "off" or not EDIT_LORA) else (0.4 if lo == "low" else 0.8))
         data = run_comfy(g, o)
     i = new_id("gen"); save_img(i, data); save_prompt(i, prompt); return [i]
 
@@ -2254,6 +2300,17 @@ def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
             if p.startswith("(Prompt nicht"): raise ValueError("Prompt dieses Bildes ist nicht gespeichert")
             emit({"type": "tool", "name": "generate_image", "prompt": p[:200]})
             for i in tool_generate({"prompt": p}, opts): emit({"type": "image", "id": i})
+        elif IMG:
+            m = next((x for x in reversed(msgs) if x.get("role") == "user"), None)
+            img_ids = [im["id"] for im in (m.get("images") or [])] if m else []
+            prompt = (m.get("text") or "").strip() if m else ""
+            if not img_ids:
+                emit({"type": "delta", "text": "Lade zuerst ein Bild hoch (Knopf unten), dann schreib in einem Satz, was geaendert werden soll."})
+            elif not prompt:
+                emit({"type": "delta", "text": "Schreib dazu, was am Bild geaendert werden soll, z.B. \"mach den Himmel violett\"."})
+            else:
+                emit({"type": "tool", "name": "edit_image", "prompt": prompt[:200]})
+                for i in tool_edit({"prompt": prompt, "image_ids": img_ids}, opts): emit({"type": "image", "id": i})
         else:
             dev = None
             if req_j.get("dev") and not notools:
@@ -2404,6 +2461,7 @@ class H(BaseHTTPRequestHandler):
 
 INDEX = open(os.path.join(HERE, "index.html"), "rb").read()
 if os.environ.get("DEV_SERVER") == "1": INDEX = INDEX.replace(b'<html lang="de">', b'<html lang="de" class="dz">', 1)
+if IMG: INDEX = INDEX.replace(b'<html lang="de">', b'<html lang="de" class="imgsrv">', 1)
 if __name__ == "__main__":
     seal_probe()
     threading.Thread(target=idle_watch, daemon=True).start()
