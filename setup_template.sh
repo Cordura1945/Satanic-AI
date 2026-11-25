@@ -145,8 +145,9 @@ if IMG:
     except Exception as e: print("FEHLER qwen-edit", type(e).__name__, str(e)[:160])
     for path in ("split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", "split_files/vae/qwen_image_vae.safetensors"):
         _mv("Comfy-Org/Qwen-Image_ComfyUI", path, B + ("text_encoders" if "text_encoders" in path else "vae"))
+    _mv("Kim2091/UltraSharp", "4x-UltraSharp.safetensors", B + "upscale_models")  # Ergebnis in Originalgroesse
     # Abschluss-Kontrolle: fehlt etwas, steht es klar im Log
-    need = [B + "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", B + "vae/qwen_image_vae.safetensors"]
+    need = [B + "text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors", B + "vae/qwen_image_vae.safetensors", B + "upscale_models/4x-UltraSharp.safetensors"]
     miss = [os.path.basename(f) for f in need if not os.path.exists(f)]
     try:
         if not [f for f in os.listdir(B + "diffusion_models") if "qwen-image-edit-2511" in f.lower()]: miss.append("qwen-image-edit-2511 (GGUF)")

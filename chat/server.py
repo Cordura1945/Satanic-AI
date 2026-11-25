@@ -181,7 +181,15 @@ def graph_qwen_edit(prompt, comfy_names, seed, steps=40, cfg=4.0):
     g["36"] = {"class_type": "KSampler", "inputs": {"model": ["7", 0], "positive": ["5r", 0], "negative": ["6r", 0],
                "latent_image": ["35", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}}
     g["37"] = {"class_type": "VAEDecode", "inputs": {"samples": ["36", 0], "vae": ["4", 0]}}
-    g["99"] = {"class_type": "SaveImage", "inputs": {"images": ["37", 0], "filename_prefix": "chat"}}
+    last = ["37", 0]
+    if os.path.exists("/workspace/ComfyUI/models/upscale_models/" + UPS):
+        # Das Modell rechnet mit ca. 1 MP: Ergebnis per KI-Upscaler schaerfen und exakt auf die Originalgroesse bringen
+        g["40"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": UPS}}
+        g["41"] = {"class_type": "ImageUpscaleWithModel", "inputs": {"upscale_model": ["40", 0], "image": last}}
+        g["42"] = {"class_type": "GetImageSize", "inputs": {"image": ["100", 0]}}
+        g["43"] = {"class_type": "ImageScale", "inputs": {"image": ["41", 0], "upscale_method": "lanczos", "width": ["42", 0], "height": ["42", 1], "crop": "disabled"}}
+        last = ["43", 0]
+    g["99"] = {"class_type": "SaveImage", "inputs": {"images": last, "filename_prefix": "chat"}}
     return g, "99"
 
 _QUNET_CACHE = [None]
