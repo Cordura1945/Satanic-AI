@@ -935,7 +935,30 @@ def tool_edit(args, opts=None):
             lo = str((opts or {}).get("lora") or "")
             g, o = graph_edit(prompt, names, random.randint(0, 2**50), 0.0 if (lo == "off" or not EDIT_LORA) else (0.4 if lo == "low" else 0.8))
         data = run_comfy(g, o)
+    if IMG:
+        try: data = keep_original(open(img_path(ids[0]), "rb").read(), data)
+        except Exception as e: print("keep_original:", e, flush=True)
     i = new_id("gen"); save_img(i, data); save_prompt(i, prompt); return [i]
+
+def keep_original(orig, res):
+    """Nur die geaenderten Stellen aus dem KI-Ergebnis uebernehmen, alles andere bleibt Original-Pixel."""
+    from PIL import Image, ImageChops, ImageFilter, ImageOps
+    o = ImageOps.exif_transpose(Image.open(io.BytesIO(orig))).convert("RGB")
+    r = Image.open(io.BytesIO(res)).convert("RGB")
+    if r.size != o.size: r = r.resize(o.size, Image.LANCZOS)
+    # Aenderungen auf einer kleinen, weichgezeichneten Kopie suchen: so zaehlen Upscaler-Texturen und Rauschen nicht als Aenderung
+    k = 512.0 / max(o.size); sz = (max(1, round(o.width * k)), max(1, round(o.height * k)))
+    a = o.resize(sz, Image.BILINEAR).filter(ImageFilter.GaussianBlur(1.5))
+    b = r.resize(sz, Image.BILINEAR).filter(ImageFilter.GaussianBlur(1.5))
+    d = ImageChops.difference(a, b)
+    ch = d.split(); d = ImageChops.lighter(ImageChops.lighter(ch[0], ch[1]), ch[2])
+    m = d.point(lambda v: 255 if v > 28 else 0)
+    frac = m.histogram()[255] / float(sz[0] * sz[1])
+    if frac == 0 or frac > 0.5:
+        return res  # nichts gefunden oder ganzes Bild geaendert (z. B. Stil/Licht): KI-Ergebnis komplett nehmen
+    m = m.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(4)).resize(o.size, Image.BILINEAR)
+    out = Image.composite(r, o, m)
+    buf = io.BytesIO(); out.save(buf, "PNG", compress_level=4); return buf.getvalue()
 
 
 # ---------------- Dateien analysieren ----------------
