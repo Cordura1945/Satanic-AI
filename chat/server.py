@@ -168,7 +168,7 @@ def graph_qwen_edit(prompt, comfy_names, seed, steps=40, cfg=4.0):
     for n, nm in enumerate(comfy_names[:3]):
         li, sc = f"1{n}0", f"1{n}1"
         g[li] = {"class_type": "LoadImage", "inputs": {"image": nm}}
-        g[sc] = {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": [li, 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1}}
+        g[sc] = {"class_type": "ImageScaleToTotalPixels", "inputs": {"image": [li, 0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 16}}
         refs.append([sc, 0])
     def tenc(nid, text):
         inp = {"clip": ["3", 0], "vae": ["4", 0], "prompt": text}
@@ -2327,8 +2327,15 @@ def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
             for i in tool_generate({"prompt": p}, opts): emit({"type": "image", "id": i})
         elif IMG:
             m = next((x for x in reversed(msgs) if x.get("role") == "user"), None)
-            img_ids = [im["id"] for im in (m.get("images") or [])] if m else []
+            def _ids(x):
+                return [(im.get("id") if isinstance(im, dict) else im) for im in (x.get("images") or []) if (im.get("id") if isinstance(im, dict) else im)]
+            img_ids = _ids(m) if m else []
             prompt = (m.get("text") or "").strip() if m else ""
+            if not img_ids and prompt:
+                # Kein neues Bild in dieser Nachricht: das zuletzt gezeigte Bild weiterbearbeiten (Ergebnis oder Upload)
+                for x in reversed(msgs[:-1] if msgs and msgs[-1] is m else msgs):
+                    xs = [i for i in _ids(x) if isinstance(i, str) and re.fullmatch(r"(img|gen)_[0-9a-f]{6}", i) and os.path.exists(img_path(i))]
+                    if xs: img_ids = xs[:1] if x.get("role") == "assistant" else xs; break
             if not img_ids:
                 emit({"type": "delta", "text": "Lade zuerst ein Bild hoch (Knopf unten), dann schreib in einem Satz, was geaendert werden soll."})
             elif not prompt:
