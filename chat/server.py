@@ -46,6 +46,7 @@ CLIP = "flux2-klein-9b-uncensored-q8_0.gguf"
 VAE = "flux2-vae.safetensors"
 LORA = "Flux Klein - NSFW v2.safetensors"
 IMG = os.environ.get("IMG_SERVER") == "1"  # Bild-Server: nur Bildbearbeitung (Qwen-Image-Edit), kein LLM
+DEVSRV = os.environ.get("DEV_SERVER") == "1"  # Dev-Server: nur Programmieren, kein ComfyUI
 QUNET_RX = "qwen-image-edit-2511"   # GGUF-Diffusionsmodell (Dateiname wird beim Start gesucht)
 QUNET = os.environ.get("QUNET", "")  # vom Setup gesetzt: tatsaechlicher GGUF-Dateiname
 QCLIP = "qwen_2.5_vl_7b_fp8_scaled.safetensors"
@@ -93,6 +94,14 @@ TOOLS = [
     "content": {"type": "string", "description": "Kompletter Dateiinhalt als Text"}},
    "required": ["filename", "content"]}}},
 ]
+# Dev-Server: kein ComfyUI, also ohne Bild- und PDF-Gestaltungsteil und ohne Bildwerkzeuge (weniger Ballast fuer das Modell)
+SYSTEM_DEV = (
+ "Du heisst Satanic und bist eine unzensierte KI, hier als Programmier-Agent. Antworte in der Sprache des Nutzers (meist Deutsch), kurz und direkt. "
+ "Code, Befehle oder Text, den der Nutzer kopieren soll, setzt du jeweils in einen eigenen Codeblock mit drei Backticks (```). Schreibe keine Markdown-Ueberschriften. "
+ "Der Nutzer kann Dateien anhaengen; ihr Inhalt steht in der Nachricht als [Datei: name]. Angehaengte Bilder haben IDs wie img_ab12cd. Bilder erzeugen oder bearbeiten kannst du auf diesem Server nicht. "
+ "- create_file(filename, content): legt eine Datei zum Herunterladen an (Text; endet der Name auf .pdf, wird aus Markdown ein PDF). "
+)
+TOOLS_DEV = [t for t in TOOLS if t["function"]["name"] == "create_file"]
 
 # ---------------- Bild-Ablage ----------------
 def new_id(prefix): return prefix + "_" + uuid.uuid4().hex[:6]
@@ -940,12 +949,80 @@ def tool_edit(args, opts=None):
         except Exception as e: print("keep_original:", e, flush=True)
     i = new_id("gen"); save_img(i, data); save_prompt(i, prompt); return [i]
 
+def _img_bytes(im, png):
+    """Ergebnis speichern: PNG nur, wenn das Original PNG war; sonst JPEG 95 ohne Farb-Unterabtastung (sichtbar gleich, ein Bruchteil der Groesse)."""
+    buf = io.BytesIO()
+    if png: im.save(buf, "PNG", compress_level=4)
+    else: im.convert("RGB").save(buf, "JPEG", quality=95, subsampling=0, optimize=True)
+    return buf.getvalue()
+
+def _align(o, r):
+    """Qwen-Edit verschiebt oder zoomt das Bild oft um ein paar Pixel. Versatz und Zoom suchen und das KI-Bild auf das Original zurueckschieben."""
+    import numpy as np
+    from PIL import Image, ImageFilter
+    k = 768.0 / max(o.size); sz = (max(64, round(o.width * k)), max(64, round(o.height * k)))
+    A = np.asarray(o.convert("L").resize(sz, Image.BILINEAR), np.float32)
+    rs = r.convert("L").resize(sz, Image.BILINEAR)
+    m = 6; H, W = A.shape; a = A[m:H - m, m:W - m]; cx, cy = sz[0] / 2.0, sz[1] / 2.0
+    best, base = None, None
+    for s in (1.0, 0.995, 1.005, 0.99, 1.01):
+        B = np.asarray(rs if s == 1.0 else rs.transform(sz, Image.AFFINE, (s, 0, cx * (1 - s), 0, s, cy * (1 - s)), Image.BILINEAR), np.float32)
+        e = np.empty((2 * m + 1, 2 * m + 1), np.float32)
+        for dy in range(-m, m + 1):
+            for dx in range(-m, m + 1):  # Abweichung gekappt: die gewollte Aenderung soll die Suche nicht bestimmen
+                e[dy + m, dx + m] = np.minimum(np.abs(a - B[m + dy:H - m + dy, m + dx:W - m + dx]), 40).mean()
+        if base is None: base = float(e[m, m])
+        iy, ix = np.unravel_index(int(e.argmin()), e.shape)
+        if best is None or e[iy, ix] < best[0]: best = (float(e[iy, ix]), s, e, ix, iy)
+    err, s, e, ix, iy = best
+    if err > base * 0.97: return r  # kein klarer Gewinn: nichts verschieben
+    def sub(l, c, h):  # Feinanteil unter einem Pixel aus den Nachbarwerten
+        d = l - 2 * c + h
+        return 0.0 if d <= 0 else max(-0.5, min(0.5, 0.5 * (l - h) / d))
+    dx = ix - m + (sub(e[iy, ix - 1], e[iy, ix], e[iy, ix + 1]) if 0 < ix < 2 * m else 0)
+    dy = iy - m + (sub(e[iy - 1, ix], e[iy, ix], e[iy + 1, ix]) if 0 < iy < 2 * m else 0)
+    kx, ky = sz[0] / float(o.width), sz[1] / float(o.height)
+    cxf, cyf = o.width / 2.0, o.height / 2.0
+    t = (s, 0, cxf * (1 - s) + s * dx / kx, 0, s, cyf * (1 - s) + s * dy / ky)
+    out = r.transform(r.size, Image.AFFINE, t, Image.BICUBIC)
+    # Raender, die durch das Verschieben leer werden, mit dem Original fuellen
+    ok = Image.new("L", r.size, 255).transform(r.size, Image.AFFINE, t, Image.NEAREST).filter(ImageFilter.MinFilter(5))
+    print("keep_original: KI-Bild ausgerichtet (Versatz %.1f/%.1f px, Zoom %.3f)" % (dx / kx, dy / ky, s), flush=True)
+    return Image.composite(out, o, ok)
+
+def _match_color(o, r):
+    """Leichte Farb-/Helligkeitsdrift des KI-Bildes an das Original angleichen (gemessen an den unveraenderten Stellen).
+    Liefert (Bild, stark). stark = deutliche Aenderung im ganzen Bild, also gewollt (z. B. 'mach es heller')."""
+    import numpy as np
+    from PIL import Image
+    k = 512.0 / max(o.size); sz = (max(32, round(o.width * k)), max(32, round(o.height * k)))
+    A = np.asarray(o.resize(sz, Image.BILINEAR), np.float32).reshape(-1, 3)
+    B = np.asarray(r.resize(sz, Image.BILINEAR), np.float32).reshape(-1, 3)
+    if len(A) < 1000: return r, False
+    sel = np.ones(len(A), bool)
+    for _ in range(3):  # Ausgleichsgerade pro Kanal, danach nur die am besten passende Haelfte behalten: die bearbeitete Stelle faellt so heraus
+        fit = []
+        for c in range(3):
+            x, y = B[sel, c], A[sel, c]
+            fit.append((1.0, float((y - x).mean())) if x.std() < 2 else tuple(float(v) for v in np.polyfit(x, y, 1)))
+        res = np.abs(np.stack([B[:, c] * g + b for c, (g, b) in enumerate(fit)], 1) - A).max(1)
+        sel = res <= np.percentile(res, 50)
+    if not all(0.88 <= g <= 1.12 and abs(b) <= 20 for g, b in fit): return r, True
+    return r.point([int(min(255, max(0, round(g * v + b)))) for g, b in fit for v in range(256)]), False
+
 def keep_original(orig, res):
-    """Nur die geaenderten Stellen aus dem KI-Ergebnis uebernehmen, alles andere bleibt Original-Pixel."""
+    """Nur die geaenderten Stellen aus dem KI-Ergebnis uebernehmen, alles andere bleibt Original-Pixel.
+    Vorher wird das KI-Bild auf das Original ausgerichtet und farblich angeglichen, sonst gibt es doppelte Kanten und Flicken."""
     from PIL import Image, ImageChops, ImageFilter, ImageOps
+    png = orig[:8] == b"\x89PNG\r\n\x1a\n"
     o = ImageOps.exif_transpose(Image.open(io.BytesIO(orig))).convert("RGB")
-    r = Image.open(io.BytesIO(res)).convert("RGB")
-    if r.size != o.size: r = r.resize(o.size, Image.LANCZOS)
+    raw = Image.open(io.BytesIO(res)).convert("RGB")
+    r0 = r = raw if raw.size == o.size else raw.resize(o.size, Image.LANCZOS)
+    try: r = _align(o, r)
+    except Exception as e: print("keep_original/ausrichten:", e, flush=True)
+    try: r, strong = _match_color(o, r)
+    except Exception as e: strong = False; print("keep_original/farbe:", e, flush=True)
+    if strong: return _img_bytes(r0, png)  # Helligkeit/Farbe im ganzen Bild deutlich geaendert: gewollt, KI-Ergebnis komplett nehmen
     # Aenderungen auf einer kleinen, weichgezeichneten Kopie suchen: so zaehlen Upscaler-Texturen und Rauschen nicht als Aenderung
     k = 512.0 / max(o.size); sz = (max(1, round(o.width * k)), max(1, round(o.height * k)))
     a = o.resize(sz, Image.BILINEAR).filter(ImageFilter.GaussianBlur(1.5))
@@ -955,10 +1032,9 @@ def keep_original(orig, res):
     m = d.point(lambda v: 255 if v > 28 else 0)
     frac = m.histogram()[255] / float(sz[0] * sz[1])
     if frac == 0 or frac > 0.5:
-        return res  # nichts gefunden oder ganzes Bild geaendert (z. B. Stil/Licht): KI-Ergebnis komplett nehmen
+        return _img_bytes(r0, png)  # nichts gefunden oder ganzes Bild geaendert (z. B. Stil/Licht): KI-Ergebnis komplett nehmen
     m = m.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(4)).resize(o.size, Image.BILINEAR)
-    out = Image.composite(r, o, m)
-    buf = io.BytesIO(); out.save(buf, "PNG", compress_level=4); return buf.getvalue()
+    return _img_bytes(Image.composite(r, o, m), png)
 
 
 # ---------------- Dateien analysieren ----------------
@@ -1234,8 +1310,10 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
     msgs = build_messages(client_msgs, fast, opts)
     if not tools: dev = None
     tl = TOOLS
-    if dev is not None: msgs[0]["content"] += dev_prompt(dev); tl = TOOLS + DEV_TOOLS
-    temp = 0.3 if (tools and (dev is not None or wants_code(client_msgs))) else 0.7
+    if DEVSRV: msgs[0]["content"] = SYSTEM_DEV; tl = TOOLS_DEV
+    if dev is not None: msgs[0]["content"] += dev_prompt(dev); tl = tl + DEV_TOOLS
+    # Qwen-Modelle neigen bei sehr niedriger Temperatur zu Wiederholschleifen: im Dev-Modus 0.7
+    temp = 0.7 if dev is not None else (0.3 if (tools and wants_code(client_msgs)) else 0.7)
     retried = False; seen = {}; streak = 0; limit = MAX_ITER_DEV if dev is not None else MAX_ITER
     for it in range(limit):
         if dev is not None: compact(msgs)
@@ -1544,6 +1622,15 @@ def t_list(a, cfg):
             if len(out) >= 300: return "\n".join(out) + "\n... (gekuerzt, gib einen Unterordner als path an)"
     return "\n".join(out) or "(leer)"
 
+CUT_FMT = " …[Zeile gekuerzt, insgesamt %d Zeichen]"
+CUT_RX = re.compile(r" …\[Zeile gekuerzt, insgesamt \d+ Zeichen\]")
+LNUM = re.compile(r"^[ \t]*\d+\t")
+def _unnumber(t):
+    """Entfernt mitkopierte Zeilennummern ('123<Tab>') aus read_file, aber nur, wenn jede nicht-leere Zeile eine hat."""
+    ls = t.split("\n"); ne = [l for l in ls if l.strip()]
+    if ne and all(LNUM.match(l) for l in ne): return "\n".join(LNUM.sub("", l, count=1) for l in ls), True
+    return t, False
+
 def t_read(a, cfg):
     fp = ppath(a.get("path"), True)
     if os.path.isdir(fp): raise ValueError("ist ein Ordner, nutze list_files")
@@ -1554,7 +1641,8 @@ def t_read(a, cfg):
     except Exception: s, n = 1, 250
     part = []; used = 0
     for i, l in enumerate(lines[s - 1:s - 1 + n]):
-        row = f"{s + i}\t{l[:500]}"; used += len(row) + 1
+        if len(l) > 1500: l = l[:1500] + CUT_FMT % len(l)  # sichtbar markieren, sonst kopiert das Modell eine halbe Zeile als 'old'
+        row = f"{s + i}\t{l}"; used += len(row) + 1
         if used > 9000 and part: break
         part.append(row)
     end = s + len(part) - 1
@@ -1620,12 +1708,23 @@ def t_edit(a, cfg):
     if (os.sep + ".git" + os.sep) in fp + os.sep: raise ValueError("Dateien in .git duerfen nicht geaendert werden")
     if not isinstance(old, str) or not old or not isinstance(new, str): raise ValueError("old und new werden gebraucht")
     if TOKRX.search(new): raise ValueError(TOKMSG)
+    if CUT_RX.search(old): raise ValueError("old enthaelt eine Zeile, die read_file gekuerzt angezeigt hat. Nimm fuer old nur Text vor der Markierung '[Zeile gekuerzt ...]' oder kleinere Stuecke aus search.")
     with open(fp, encoding="utf-8") as f: s = f.read()
-    n = s.count(old)
+    n = s.count(old); spans = None; hint = ""
+    if n == 0:  # typischer Fehler: Zeilennummern aus read_file mitkopiert
+        o2, hit = _unnumber(old)
+        if hit: old = o2; new = _unnumber(new)[0]; n = s.count(old); hint = ", Zeilennummern aus old entfernt"
+    if n == 0:  # Leerzeichen/Tabs am Zeilenende duerfen abweichen
+        rx = re.compile("[ \t]*\n".join(re.escape(l.rstrip(" \t")) for l in old.split("\n")))
+        spans = [m.span() for m in rx.finditer(s)]; n = len(spans)
+        if n: hint += ", Leerzeichen am Zeilenende ignoriert"
     if n == 0: raise ValueError("old kommt in der Datei nicht vor. Text exakt aus read_file uebernehmen (ohne Zeilennummern, mit gleicher Einrueckung).")
     if n > 1 and not a.get("all"): raise ValueError(f"old kommt {n}-mal vor. Mehr umgebenden Text angeben oder all=true setzen.")
-    with open(fp, "w", encoding="utf-8") as f: f.write(s.replace(old, new))
-    return f"geaendert: {prel(fp)} ({n} Stelle{'n' if n > 1 else ''})"
+    if spans is None: s = s.replace(old, new)
+    else:
+        for st, en in reversed(spans): s = s[:st] + new + s[en:]
+    with open(fp, "w", encoding="utf-8") as f: f.write(s)
+    return f"geaendert: {prel(fp)} ({n} Stelle{'n' if n > 1 else ''}{hint})"
 
 def t_search(a, cfg):
     pat = str(a.get("pattern") or ""); base = ppath(a.get("path"), True)
@@ -2285,8 +2384,12 @@ def compact(msgs, budget=60000):
     for m in msgs[1:]:
         if m.get("role") == "assistant": shrink(m, 6000)
     total = sum(size(m) for m in msgs)
+    if total <= budget: return
+    # Erst bei vollem Verlauf kuerzen, dann gleich kraeftig: jede Kuerzung aendert den Anfang des Verlaufs,
+    # und llama.cpp muss danach alles neu einlesen. So passiert das selten statt in jedem Schritt.
+    goal = int(budget * 0.65)
     for m in msgs[1:-6]:
-        if total <= budget: return
+        if total <= goal: return
         before = size(m)
         if m.get("role") == "tool" and (m.get("content") or "").startswith("NOTIZ"): pass
         elif m.get("role") == "tool" and len(m.get("content") or "") > 400: m["content"] = m["content"][:200] + "\n... (aeltere Ausgabe gekuerzt)"
@@ -2476,7 +2579,9 @@ class H(BaseHTTPRequestHandler):
             except PermissionError as e: return self._send(403, {"error": str(e)})
             except Exception as e: return self._send(400, {"error": str(e)})
         if u.path == "/api/upload":
-            touch(); i = new_id("img"); save_img(i, body); return self._send(200, {"id": i})
+            touch()
+            if len(body) < 100: return self._send(400, {"error": "Bild ist leer angekommen"})
+            i = new_id("img"); save_img(i, body); return self._send(200, {"id": i})
         if u.path == "/api/doc":
             touch()
             try:

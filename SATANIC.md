@@ -7,6 +7,7 @@
 - setup_template.sh: Setup-Skript fuer den Pod (Modelle laden, Dienste starten). Zeilen mit @@EMBED:...@@ nicht anfassen.
 - tools/build_setup.py: baut aus setup_template.sh und chat/ die Datei setup_all.sh. Laeuft im Build automatisch.
 - tools/smoke_test.py: Probelauf des Chat-Servers mit nachgebautem Sprachmodell. Laeuft bei "build_setup.py --check" mit.
+- tools/unit_test.py: Einzeltests (edit_file, Verlauf kuerzen, Dev-Server-Werkzeuge, Bildabgleich). Laeuft bei "build_setup.py --check" mit.
 - KIStart.swift: Starter-App fuer iPhone (SwiftUI). project.yml gehoert dazu.
 - app.html: Starter-App fuer Android und Windows (eine Datei). main.js, package.json, capacitor.config.json sind die Huelle.
 - .github/workflows/build.yml: baut ipa, apk und exe und legt sie im Release latest-<branch> ab.
@@ -42,4 +43,4 @@
 - Build ohne Code-Fehler gescheitert (Aussetzer bei GitHub): build_rerun statt eines leeren Commits.
 - Loeschen, Verschieben, Umbenennen: mit run (rm, mv). Letzten Commit zuruecknehmen: run "git revert --no-edit HEAD", danach git_push.
 - Grosse Dateien (chat/server.py, chat/index.html, KIStart.swift, app.html) nie komplett lesen: erst outline oder search, dann read_file ab der gefundenen Zeile. Funde mit note festhalten.
-- chat/server.py darf nur die Python-Standardbibliothek nutzen (auf dem Pod wird nichts nachinstalliert).
+- chat/server.py darf nur die Python-Standardbibliothek nutzen (auf dem Pod wird nichts nachinstalliert). Einzige Ausnahme: der Bildabgleich des Bild-Servers (keep_original, _align, _match_color) nutzt Pillow und numpy aus ComfyUI und faellt ohne sie auf das alte Verhalten zurueck.

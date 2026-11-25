@@ -242,10 +242,15 @@ status();setInterval(status,15000);
 function loadImg(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
 function toJpeg(src,w,h,max,q){const s=Math.min(1,max/Math.max(w,h));const c=document.createElement('canvas');c.width=Math.round(w*s);c.height=Math.round(h*s);c.getContext('2d').drawImage(src,0,0,c.width,c.height);return c}
 function blobOf(c,q){return new Promise(r=>c.toBlob(r,'image/jpeg',q))}
-async function addCanvasSource(src,w,h){
-  const isImg=document.documentElement.classList.contains('imgsrv');const full=await blobOf(toJpeg(src,w,h,isImg?8192:2048),isImg?0.97:0.92);
+async function addCanvasSource(src,w,h,orig){
+  const isImg=document.documentElement.classList.contains('imgsrv');
+  // iPhone-Browser: Canvas hoechstens ca. 16,7 Mio. Pixel, groessere Bilder kommen sonst leer heraus
+  const cap=isImg?Math.min(8192,Math.floor(Math.max(w,h)*Math.sqrt(16e6/Math.max(1,w*h)))):2048;
+  const full=orig||await blobOf(toJpeg(src,w,h,cap),isImg?0.97:0.92);
+  if(!full||!full.size)throw new Error('Bild konnte nicht umgewandelt werden');
   const th=toJpeg(src,w,h,896).toDataURL('image/jpeg',0.8);
   const r=await fetch('/api/upload',{method:'POST',body:full});const j=await r.json();
+  if(!r.ok||!j.id)throw new Error(j.error||'Upload fehlgeschlagen');
   thumbs[j.id]=th;pend.push({id:j.id,thumb:th});chips();
 }
 async function addFile(f){
@@ -260,7 +265,9 @@ async function addFile(f){
     }URL.revokeObjectURL(url);
   }else{
     const url=URL.createObjectURL(f);const i=await loadImg(url);
-    await addCanvasSource(i,i.naturalWidth,i.naturalHeight);URL.revokeObjectURL(url);
+    // Bild-Server: JPEG und PNG unveraendert hochladen, ohne Neukodierung geht keine Qualitaet verloren
+    const keep=document.documentElement.classList.contains('imgsrv')&&/^image\/(jpeg|png)$/.test(f.type)&&f.size<40e6;
+    try{await addCanvasSource(i,i.naturalWidth,i.naturalHeight,keep?f:null)}finally{URL.revokeObjectURL(url)}
   }
 }
 function chips(){const c=$('#chips');c.innerHTML='';pendDocs.forEach((p,k)=>{const d=document.createElement('div');d.className='dd';d.textContent='📄 '+p.name;const x=document.createElement('span');x.textContent='×';x.onclick=()=>{pendDocs.splice(k,1);chips()};d.appendChild(x);c.appendChild(d)});pend.forEach((p,k)=>{const d=document.createElement('div');d.className='c';const i=document.createElement('img');i.src=p.thumb;const x=document.createElement('span');x.textContent='×';x.onclick=()=>{pend.splice(k,1);chips()};d.append(i,x);c.appendChild(d)})}

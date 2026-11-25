@@ -156,6 +156,14 @@ def check(data, real):
             say(r.returncode == 0, "Probelauf des Chat-Servers" + ("" if r.returncode == 0 else "\n" + rest))
         except subprocess.TimeoutExpired:
             say(False, "Probelauf des Chat-Servers (Zeitlimit ueberschritten)")
+    unit = os.path.join(ROOT, "tools", "unit_test.py")
+    if os.name != "nt" and os.path.isfile(unit):
+        try:
+            r = subprocess.run([sys.executable, unit], capture_output=True, text=True, timeout=240)
+            rest = "\n".join(l for l in (r.stdout + r.stderr).split("\n") if l.strip() and not l.startswith("OK "))[-900:]
+            say(r.returncode == 0, "Einzeltests (edit_file, Verlauf kuerzen, Dev-Server, Bildabgleich)" + ("" if r.returncode == 0 else "\n" + rest))
+        except subprocess.TimeoutExpired:
+            say(False, "Einzeltests (Zeitlimit ueberschritten)")
     size = len(base64.b64encode(gzip.compress(data, 9, mtime=0)))
     if license_server():
         ld = loader()
