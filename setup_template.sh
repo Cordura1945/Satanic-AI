@@ -226,13 +226,20 @@ else
   if [ ! -x llama.cpp/build/bin/llama-server ]; then
     apt-get update -qq >/dev/null 2>&1
     apt-get install -y -qq cmake build-essential git libssl-dev >/dev/null 2>&1
+    # Feste llama.cpp-Version: der neueste Stand kann sich ueber Nacht aendern (z. B. das Auslesen der Werkzeug-Aufrufe).
+    # Zum Aktualisieren nur LLAMA_TAG aendern (Liste: github.com/ggml-org/llama.cpp/releases).
+    LLAMA_TAG="${LLAMA_TAG:-b12697}"
     # Schlanker Download mit Wiederholung: ein Verbindungsaussetzer bei GitHub soll den Start nicht kippen
     for i in 1 2 3 4; do
       [ -f llama.cpp/CMakeLists.txt ] && break
       rm -rf llama.cpp
-      git -c http.version=HTTP/1.1 clone --depth 1 https://github.com/ggml-org/llama.cpp && break
-      echo "HINWEIS: llama.cpp laden, Versuch $i fehlgeschlagen"; sleep $((i * 10))
+      git -c http.version=HTTP/1.1 clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp && break
+      echo "HINWEIS: llama.cpp $LLAMA_TAG laden, Versuch $i fehlgeschlagen"; sleep $((i * 10))
     done
+    if [ ! -f llama.cpp/CMakeLists.txt ]; then
+      echo "HINWEIS: feste Version $LLAMA_TAG nicht ladbar, nehme den neuesten Stand"
+      rm -rf llama.cpp; git -c http.version=HTTP/1.1 clone --depth 1 https://github.com/ggml-org/llama.cpp || true
+    fi
     cd llama.cpp || { echo "FEHLER: llama.cpp konnte nicht geladen werden"; cd /workspace; mkdir -p llama.cpp; cd llama.cpp; }
     cmake -B build -DGGML_CUDA=ON >/tmp/cmake.log 2>&1 && \
     cmake --build build --config Release -j"$(nproc)" --target llama-server >/tmp/build.log 2>&1

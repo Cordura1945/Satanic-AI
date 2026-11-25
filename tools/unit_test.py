@@ -72,7 +72,7 @@ def test_compact(S):
 
 def test_devserver(S):
     seen = {}
-    def fake(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None):
+    def fake(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
         seen["sys"] = messages[0]["content"]; seen["tools"] = [t["function"]["name"] for t in (tool_list or [])]; seen["temp"] = temp
         return "ok", []
     S.llm_stream = fake
@@ -88,6 +88,78 @@ def test_devserver(S):
             say("generate_image" in names and "write_file" in names and "BILD-PROMPTS" in seen["sys"], "normaler Server: Bildwerkzeuge bleiben", seen)
         say(seen["temp"] == 0.7, "Dev-Modus laeuft mit Temperatur 0.7" + (" (Dev-Server)" if devsrv else ""), seen["temp"])
     S.DEVSRV = False
+
+
+def test_dev_loop(S, proj):
+    """Werkzeug-Aufrufe pruefen, Sofortpruefung, mehrere Aenderungen, Auto-Weiter, Build-Warten."""
+    # 1) kaputte oder unvollstaendige Aufrufe werden nicht ausgefuehrt
+    a, e = S.call_check({"name": "write_file", "args": '{"path": "demo/x.py", "content": "abc'})
+    say(e and "kein gueltiges JSON" in e, "kaputte Werkzeug-Angaben werden gemeldet", e)
+    a, e = S.call_check({"name": "write_file", "args": '{"path": "demo/x.py"}'})
+    say(e and "content" in e, "fehlende Pflichtangabe wird gemeldet", e)
+    a, e = S.call_check({"name": "write_file", "args": '{"path": "demo/x.py", "content": "x"}'}, "length")
+    say(e and "abgeschnitten" in e, "an der Laengengrenze abgeschnittener Aufruf wird gemeldet", e)
+    a, e = S.call_check({"name": "zauber", "args": "{}"})
+    say(e and "gibt es nicht" in e, "unbekanntes Werkzeug wird gemeldet", e)
+    a, e = S.call_check({"name": "edit_file", "args": '{"path": "demo/x.py", "old": "a", "new": ""}'})
+    say(e is None, "gueltiger Aufruf (auch mit leerem new) geht durch", e)
+
+    # im Ablauf: kaputter write_file schreibt nichts, Verlauf bekommt "{}" statt der kaputten Angaben
+    calls = [[{"id": "c1", "name": "write_file", "args": '{"path": "demo/kaputt.py", "content": "pri'}], []]
+    hist = []
+    def fake(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
+        hist.append(json.loads(json.dumps(messages)))
+        if stats is not None: stats["t"] = {"prompt_n": 120, "prompt_ms": 400, "cache_n": 3000, "predicted_n": 50, "predicted_ms": 900}
+        return "", calls.pop(0) if calls else []
+    S.llm_stream = fake; evs = []
+    S.chat([{"role": "user", "text": "los", "images": []}], evs.append, dev={"repo": "", "token": ""})
+    last = hist[-1]; tc = [m for m in last if m.get("role") == "assistant" and m.get("tool_calls")][0]["tool_calls"][0]
+    res = [m for m in last if m.get("role") == "tool"][0]["content"]
+    say(not os.path.exists(os.path.join(proj, "demo", "kaputt.py")) and tc["function"]["arguments"] == "{}" and res.startswith("FEHLER"),
+        "Ablauf: kaputter write_file schreibt nichts und vergiftet den Verlauf nicht", res[:200])
+    say(any(ev.get("type") == "stat" and "eingelesen 120 Tokens" in ev.get("text", "") and "3000 aus Zwischenspeicher" in ev.get("text", "") for ev in evs),
+        "Zeitmessung pro Schritt wird angezeigt", [ev for ev in evs if ev.get("type") == "stat"][:2])
+
+    # 2) Sofortpruefung nach write_file/edit_file
+    S.SHELL_OK = True
+    r = S.t_write({"path": "demo/ok.py", "content": "x = 1\n"}, {})
+    say("Sofortpruefung: OK" in r, "Sofortpruefung: fehlerfreie Datei", r)
+    r = S.t_write({"path": "demo/bad.py", "content": "def f(:\n"}, {})
+    say("Sofortpruefung: FEHLER" in r and "bad.py" in r, "Sofortpruefung: Syntaxfehler wird sofort gemeldet", r)
+    r = S.t_write({"path": "demo/bad.json", "content": "{\"a\": }"}, {})
+    say("Sofortpruefung: FEHLER" in r, "Sofortpruefung: kaputtes JSON wird sofort gemeldet", r)
+
+    # 3) mehrere Aenderungen in einem Aufruf, alles oder nichts
+    p = os.path.join(proj, "demo", "m.py"); open(p, "w").write("a = 1\nb = 2\nc = 3\n")
+    r = S.t_edit({"path": "demo/m.py", "edits": [{"old": "a = 1", "new": "a = 10"}, {"old": "c = 3", "new": "c = 30"}]}, {})
+    say(open(p).read() == "a = 10\nb = 2\nc = 30\n" and "Sofortpruefung: OK" in r, "edit_file: mehrere Aenderungen in einem Aufruf", r)
+    err = fails(lambda: S.t_edit({"path": "demo/m.py", "edits": [{"old": "b = 2", "new": "b = 20"}, {"old": "gibts nicht", "new": "x"}]}, {}))
+    say(err and "Aenderung 2 von 2" in err and open(p).read() == "a = 10\nb = 2\nc = 30\n", "edit_file: passt eine Aenderung nicht, bleibt die Datei unveraendert", err)
+    r = S.t_edit({"path": "demo/m.py", "edits": json.dumps([{"old": "b = 2", "new": "b = 20"}])}, {})
+    say("b = 20" in open(p).read(), "edit_file: edits auch als JSON-Text", r)
+    S.SHELL_OK = False
+
+    # 4) Auto-Weiter: nach MAX_ITER_DEV Schritten geht es von selbst weiter, am Ende kommt der Abschlussbericht
+    S.MAX_ITER_DEV, S.AUTO_ROUNDS = 3, 2
+    n = [0]; final = []
+    def busy(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
+        if not tools: final.append(messages[-1]["content"]); return "Bericht", []
+        n[0] += 1
+        return "", [{"id": "n%d" % n[0], "name": "note", "args": json.dumps({"text": "Schritt %d" % n[0]})}]
+    S.llm_stream = busy; evs = []
+    S.chat([{"role": "user", "text": "los", "images": []}], evs.append, dev={"repo": "", "token": ""})
+    cont = [ev for ev in evs if ev.get("type") == "stat" and "automatisch weiter" in ev.get("text", "")]
+    say(n[0] == 9 and len(cont) == 2 and final and "Schrittlimit" in final[0], "Auto-Weiter: 2 zusaetzliche Runden, danach Abschlussbericht", (n[0], len(cont)))
+    S.MAX_ITER_DEV, S.AUTO_ROUNDS = 60, 2
+
+    # 5) git_push wartet auf den Build, wenn das Projekt einen Workflow hat
+    d = os.path.join(proj, "demo")
+    say(S._push_build({"project": "demo"}, {}, d) == "", "kein Workflow: git_push wartet nicht")
+    os.makedirs(os.path.join(d, ".github", "workflows")); open(os.path.join(d, ".github", "workflows", "b.yml"), "w").write("on: push\n")
+    S.t_build = lambda a, cfg: "Lauf 1: completed, Ergebnis success"
+    r = S._push_build({"project": "demo"}, {}, d)
+    say("BUILD-ERGEBNIS" in r and "success" in r, "mit Workflow: git_push meldet das Build-Ergebnis", r)
+    say(S._push_build({"project": "demo", "wait_build": False}, {}, d) == "", "wait_build=false: git_push wartet nicht")
 
 
 def test_images(S):
@@ -143,6 +215,7 @@ def main():
         test_edit(S, os.environ["PROJECTS"])
         test_compact(S)
         test_devserver(S)
+        test_dev_loop(S, os.environ["PROJECTS"])
         test_images(S)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -1265,7 +1265,8 @@ def wants_code(client_msgs):
             return any(str(d.get("name", "")).lower().endswith(CODE_EXT) for d in (m.get("docs") or []) if isinstance(d, dict))
     return False
 
-def llm_stream(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None):
+def llm_stream(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
+    """stats (optional): bekommt 'fr' (Abbruchgrund, z. B. length) und 't' (Zeitwerte von llama.cpp)."""
     body = {"messages": messages, "stream": True, "temperature": temp,
             "chat_template_kwargs": {"enable_thinking": bool(think)}}
     if tools: body["tools"] = tool_list or TOOLS
@@ -1277,7 +1278,13 @@ def llm_stream(messages, emit, fast=False, tools=True, think=False, temp=0.7, to
             if not line.startswith("data:"): continue
             p = line[5:].strip()
             if p == "[DONE]": break
-            try: d = json.loads(p)["choices"][0].get("delta", {})
+            try:
+                obj = json.loads(p)
+                if stats is not None and isinstance(obj.get("timings"), dict): stats["t"] = obj["timings"]
+                ch = (obj.get("choices") or [None])[0]
+                if not isinstance(ch, dict): continue
+                if stats is not None and ch.get("finish_reason"): stats["fr"] = ch["finish_reason"]
+                d = ch.get("delta") or {}
             except Exception: continue
             if think and d.get("reasoning_content") and not told: told = True; emit({"type": "think"})
             if d.get("content") and think:
@@ -1314,10 +1321,16 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
     if dev is not None: msgs[0]["content"] += dev_prompt(dev); tl = tl + DEV_TOOLS
     # Qwen-Modelle neigen bei sehr niedriger Temperatur zu Wiederholschleifen: im Dev-Modus 0.7
     temp = 0.7 if dev is not None else (0.3 if (tools and wants_code(client_msgs)) else 0.7)
-    retried = False; seen = {}; streak = 0; limit = MAX_ITER_DEV if dev is not None else MAX_ITER
+    retried = False; seen = {}; streak = 0; limit = MAX_ITER_DEV * (1 + AUTO_ROUNDS) if dev is not None else MAX_ITER
     for it in range(limit):
-        if dev is not None: compact(msgs)
-        text, calls = llm_stream(msgs, emit, fast, tools, think, temp, tl)
+        if dev is not None:
+            compact(msgs)
+            if it and it % MAX_ITER_DEV == 0:  # Auto-Weiter: nach 60 Schritten nicht anhalten, nur den Zwischenstand sichern lassen
+                emit({"type": "stat", "text": f"{it} Schritte erreicht, mache automatisch weiter (hoechstens {limit})"})
+                msgs.append({"role": "user", "content": f"SYSTEM-HINWEIS: {it} Schritte sind erreicht, es geht automatisch weiter (hoechstens {limit}). Halte zuerst mit note kurz fest, was erledigt und was offen ist, dann arbeite weiter. Ist alles erledigt, schreibe direkt den Abschlussbericht ohne Werkzeug."})
+        st = {}; t0 = time.time()
+        text, calls = llm_stream(msgs, emit, fast, tools, think, temp, tl, st)
+        if dev is not None: emit({"type": "stat", "text": step_stat(st, time.time() - t0)})
         if not calls and tools and not retried and BADTAG.search(text or ""):
             retried = True
             emit({"type": "clear"})
@@ -1327,11 +1340,15 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
             if dev is not None: pushlog(dev, text, emit)
             return
         if dev is not None and (text or "").strip(): emit({"type": "delta", "text": "\n\n"})
+        checked = [(c,) + call_check(c, st.get("fr")) for c in calls]
+        # Kaputte Angaben nicht in den Verlauf: llama.cpp lehnt sonst auch alle folgenden Anfragen ab
         msgs.append({"role": "assistant", "content": text or None, "tool_calls": [
-            {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["args"] or "{}"}} for c in calls]})
-        for c in calls:
-            try: args = json.loads(c["args"] or "{}")
-            except Exception: args = {}
+            {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": "{}" if err and not args else (c["args"] or "{}")}} for c, args, err in checked]})
+        for c, args, err in checked:
+            if err:
+                emit({"type": "step", "ok": False, "text": err[:300]})
+                msgs.append({"role": "tool", "tool_call_id": c["id"], "content": err + f"\n[Schritt {it + 1} von {limit}]"})
+                continue
             if c["name"] in DEV_FN:
                 lab, key = DEV_LABEL[c["name"]]
                 ab = f" (ab Zeile {args.get('start')})" if c["name"] in ("read_file", "outline") and args.get("start") else ""
@@ -1395,6 +1412,7 @@ ASKPASS = os.path.join(SAFE, "askpass.sh")
 GITIGN = os.path.join(SAFE, "dev_gitignore")
 SEALED = [None]
 MAX_ITER_DEV = 60
+AUTO_ROUNDS = 2  # so oft macht der Dev-Modus nach MAX_ITER_DEV Schritten von selbst weiter (Stopp-Knopf geht immer)
 NOTES = os.path.join(STORE, "dev_notes.md")
 DEV_RO = {"list_files", "read_file", "search", "outline", "run", "build_status", "get_build", "send_file", "check", "changes", "preview", "fetch_url", "find_files", "run_tests"}
 DEV_READ = {"list_files", "read_file", "search", "outline", "find_files", "fetch_url"}
@@ -1700,16 +1718,43 @@ def t_write(a, cfg):
     if TOKRX.search(c): raise ValueError(TOKMSG)
     fp = ppath(a.get("path")); new = not os.path.exists(fp)
     _wbytes(fp, c.encode("utf-8"))
-    return f"{'angelegt' if new else 'ueberschrieben'}: {prel(fp)} ({c.count(chr(10)) + 1} Zeilen)"
+    return f"{'angelegt' if new else 'ueberschrieben'}: {prel(fp)} ({c.count(chr(10)) + 1} Zeilen)" + _quick_check(fp)
+
+def _quick_check(fp):
+    """Sofortpruefung nach write_file/edit_file: Syntaxfehler gleich melden statt erst beim Push."""
+    if not fp.lower().endswith(CHECK_EXT) or not SHELL_OK: return ""
+    try: code, out = sh(["python3", "-c", PRECHK, "-q", prel(fp)], os.path.realpath(PROJECTS), 60)
+    except Exception as e: return f"\nSofortpruefung nicht moeglich: {e}"
+    if code == 0: return "\nSofortpruefung: OK"
+    if code == -9: return "\nSofortpruefung: Zeitlimit erreicht, nicht geprueft"
+    return "\nSofortpruefung: FEHLER " + clip(out.strip(), 1500) + "\nBehebe das zuerst."
 
 def t_edit(a, cfg):
-    fp = ppath(a.get("path"), True); old = a.get("old"); new = a.get("new")
+    fp = ppath(a.get("path"), True)
     if os.path.isdir(fp): raise ValueError("path ist ein Ordner")
     if (os.sep + ".git" + os.sep) in fp + os.sep: raise ValueError("Dateien in .git duerfen nicht geaendert werden")
+    eds = a.get("edits") or []
+    if isinstance(eds, str):
+        try: eds = json.loads(eds)
+        except Exception: raise ValueError("edits muss eine Liste aus {old, new} sein")
+    if not isinstance(eds, list) or not all(isinstance(e, dict) for e in eds): raise ValueError("edits muss eine Liste aus {old, new} sein")
+    if a.get("old") is not None or not eds: eds = [{"old": a.get("old"), "new": a.get("new"), "all": a.get("all")}] + eds
+    with open(fp, encoding="utf-8") as f: s = f.read()
+    done = []
+    for k, e in enumerate(eds):  # alles oder nichts: geschrieben wird erst, wenn jede Aenderung passt
+        try: s, n, hint = _edit_one(s, e.get("old"), e.get("new"), e.get("all"))
+        except ValueError as x:
+            if len(eds) == 1: raise
+            raise ValueError(f"Aenderung {k + 1} von {len(eds)}: {x} Es wurde NICHTS geaendert, auch keine der anderen Aenderungen.")
+        done.append(f"{n} Stelle{'n' if n > 1 else ''}{hint}")
+    with open(fp, "w", encoding="utf-8") as f: f.write(s)
+    return f"geaendert: {prel(fp)} ({'; '.join(done)})" + _quick_check(fp)
+
+def _edit_one(s, old, new, all_):
+    """Eine Ersetzung im Text s. Liefert (neuer Text, Anzahl Stellen, Hinweis) oder ValueError."""
     if not isinstance(old, str) or not old or not isinstance(new, str): raise ValueError("old und new werden gebraucht")
     if TOKRX.search(new): raise ValueError(TOKMSG)
     if CUT_RX.search(old): raise ValueError("old enthaelt eine Zeile, die read_file gekuerzt angezeigt hat. Nimm fuer old nur Text vor der Markierung '[Zeile gekuerzt ...]' oder kleinere Stuecke aus search.")
-    with open(fp, encoding="utf-8") as f: s = f.read()
     n = s.count(old); spans = None; hint = ""
     if n == 0:  # typischer Fehler: Zeilennummern aus read_file mitkopiert
         o2, hit = _unnumber(old)
@@ -1719,12 +1764,11 @@ def t_edit(a, cfg):
         spans = [m.span() for m in rx.finditer(s)]; n = len(spans)
         if n: hint += ", Leerzeichen am Zeilenende ignoriert"
     if n == 0: raise ValueError("old kommt in der Datei nicht vor. Text exakt aus read_file uebernehmen (ohne Zeilennummern, mit gleicher Einrueckung).")
-    if n > 1 and not a.get("all"): raise ValueError(f"old kommt {n}-mal vor. Mehr umgebenden Text angeben oder all=true setzen.")
+    if n > 1 and not all_: raise ValueError(f"old kommt {n}-mal vor. Mehr umgebenden Text angeben oder all=true setzen.")
     if spans is None: s = s.replace(old, new)
     else:
         for st, en in reversed(spans): s = s[:st] + new + s[en:]
-    with open(fp, "w", encoding="utf-8") as f: f.write(s)
-    return f"geaendert: {prel(fp)} ({n} Stelle{'n' if n > 1 else ''}{hint})"
+    return s, n, hint
 
 def t_search(a, cfg):
     pat = str(a.get("pattern") or ""); base = ppath(a.get("path"), True)
@@ -1946,12 +1990,23 @@ def t_push(a, cfg):
     cfg.setdefault("_pushlog", []).append(f"{repo} ({'Arbeitszweig ' + WORK if work else 'Branch ' + br}), Commit {sha}" + (": " + stat.split(chr(10))[-1].strip() if stat else ": keine neuen Dateien"))
     info = ((sy + ". " if sy else "") + "TATSAECHLICH IM COMMIT (nur das darfst du als geaendert melden):\n" + (clip(stat, 2500) if stat else "keine neuen Aenderungen") + "\n"
             + ("NICHT mit gepusht (noch ungesichert): " + ", ".join(left[:10]) + ". " if left else ""))
+    bres = _push_build(a, cfg, d)
     if work:
         return (f"Gepusht auf den Arbeitszweig {WORK} von {repo}, Commit {sha}. Der Hauptzweig {br} ist geschuetzt und wurde NICHT geaendert. " + info
-                + f"Der Build fuer den Arbeitszweig laeuft jetzt: mit build_status pruefen, fertige Dateien mit get_build holen. Nach {br} uebernehmen kann nur der Nutzer, hier: "
-                + _pr(repo, default, tok, msg.split("\n")[0]) + " . Nenne ihm diesen Link zusammen mit dem Build-Ergebnis.")
+                + ("" if bres else "Der Build fuer den Arbeitszweig laeuft jetzt: mit build_status pruefen. ") + f"Fertige Dateien mit get_build holen. Nach {br} uebernehmen kann nur der Nutzer, hier: "
+                + _pr(repo, default, tok, msg.split("\n")[0]) + " . Nenne ihm diesen Link zusammen mit dem Build-Ergebnis." + bres)
     return (f"{'Neues privates Repo angelegt. ' if created else ''}Gepusht nach {repo}, Branch {br}, Commit {sha}. " + info
-            + "Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen, fertige Dateien mit get_build holen.")
+            + ("Falls das Repo einen GitHub-Actions-Workflow hat, laeuft jetzt der Build: mit build_status pruefen, fertige Dateien mit get_build holen." if not bres else "Fertige Dateien mit get_build holen.") + bres)
+
+def _push_build(a, cfg, d):
+    """git_push wartet selbst auf den Build (GitHub Actions), damit ein Fehlschlag nicht uebersehen wird."""
+    if a.get("wait_build") is False: return ""
+    wf = os.path.join(d, ".github", "workflows")
+    try:
+        if not any(f.endswith((".yml", ".yaml")) for f in os.listdir(wf)): return ""
+    except Exception: return ""
+    try: return "\n\nBUILD-ERGEBNIS (git_push hat auf den Build gewartet):\n" + t_build({"project": a.get("project"), "wait": True}, cfg)
+    except Exception as e: return f"\n\nBuild-Ergebnis nicht abrufbar ({e}); mit build_status pruefen."
 
 def t_build(a, cfg):
     d = _proj(a); tok = cfg.get("token"); repo = _origin(d)
@@ -1962,7 +2017,7 @@ def t_build(a, cfg):
     while True:
         runs = gh("GET", f"/repos/{repo}/actions/runs?head_sha={sha}&per_page=5", tok).get("workflow_runs") or []
         run = runs[0] if runs else None
-        if (run and run.get("status") == "completed") or not wait or time.time() > end: break
+        if (run and run.get("status") == "completed") or not wait or time.time() > end or cfg.get("_halt"): break
         time.sleep(12)
     if not run: return f"Kein Workflow-Lauf fuer Commit {sha[:7]} gefunden. Entweder hat das Repo keinen Workflow oder der Lauf startet gleich (spaeter erneut pruefen)."
     jobs = gh("GET", f"/repos/{repo}/actions/runs/{run['id']}/jobs?per_page=50", tok).get("jobs") or []
@@ -2265,11 +2320,13 @@ DEV_TOOLS = [
      {"path": _S("Dateipfad, z.B. MeinProjekt/app.py"), "start": {"type": "integer", "description": "erste Zeile, Standard 1"}, "lines": {"type": "integer", "description": "Anzahl Zeilen, Standard 250"}}, ["path"]),
  _fn("outline", "Zeigt die Gliederung einer Datei: Funktionen, Klassen, Abschnitte mit Zeilennummern. Bei grossen Dateien zuerst das, dann gezielt read_file.",
      {"path": _S("Dateipfad"), "filter": _S("nur Zeilen mit diesem Text (optional)"), "start": {"type": "integer", "description": "ab dieser Zeile (zum Weiterblaettern)"}}, ["path"]),
- _fn("write_file", "Legt eine Projektdatei an oder ueberschreibt sie komplett. Fuer neue Dateien oder komplette Neufassungen.",
+ _fn("write_file", "Legt eine Projektdatei an oder ueberschreibt sie komplett. Fuer neue Dateien oder komplette Neufassungen. Prueft die Datei danach sofort auf Syntaxfehler.",
      {"path": _S("Dateipfad, z.B. MeinProjekt/app.py"), "content": _S("kompletter Dateiinhalt")}, ["path", "content"]),
- _fn("edit_file", "Ersetzt in einer Datei einen exakten Textabschnitt. Fuer gezielte Aenderungen an vorhandenen Dateien.",
+ _fn("edit_file", "Ersetzt in einer Datei exakte Textabschnitte. Fuer gezielte Aenderungen an vorhandenen Dateien. Eine Aenderung mit old/new, mehrere an derselben Datei in EINEM Aufruf mit edits (alles oder nichts). Prueft die Datei danach sofort auf Syntaxfehler.",
      {"path": _S("Dateipfad"), "old": _S("exakter vorhandener Text (ohne Zeilennummern), muss eindeutig sein"), "new": _S("neuer Text"),
-      "all": {"type": "boolean", "description": "alle Vorkommen ersetzen"}}, ["path", "old", "new"]),
+      "all": {"type": "boolean", "description": "alle Vorkommen ersetzen"},
+      "edits": {"type": "array", "description": "mehrere Aenderungen nacheinander, statt old/new",
+                "items": {"type": "object", "properties": {"old": _S("exakter vorhandener Text"), "new": _S("neuer Text"), "all": {"type": "boolean"}}, "required": ["old", "new"]}}}, ["path"]),
  _fn("search", "Sucht ein Muster (Regex, ohne Gross/Klein) in den Projektdateien.", {"pattern": _S("Suchmuster"), "path": _S("Ordner oder Datei, leer = alles"),
      "context": {"type": "integer", "description": "0 bis 3 Zeilen vor und nach jedem Treffer mit ausgeben"}}, ["pattern"]),
  _fn("run", "Fuehrt einen Shell-Befehl (bash) im Projektordner aus und liefert Ausgabe und Exit-Code. Fuer Syntaxpruefung, Tests, Skripte. Keine Dauerlaeufer oder Server starten.",
@@ -2277,10 +2334,11 @@ DEV_TOOLS = [
  _fn("git_clone", "Holt ein GitHub-Repo in den Projektordner oder aktualisiert es, wenn es schon da ist. Ohne Angaben wird das in den Einstellungen hinterlegte Repo genommen.",
      {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard"),
       "fresh": {"type": "boolean", "description": "lokalen Stand verwerfen und exakt den Stand von GitHub holen (nach einem Konflikt); lokale Commits bleiben im Zweig satanic-sicherung"}}, []),
- _fn("git_push", "Committet Aenderungen eines Projekts, gleicht selbst mit GitHub ab und pusht. Bei Projekten mit Build geht der Push auf den Arbeitszweig satanic-dev, nicht auf den Hauptzweig. Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt.",
+ _fn("git_push", "Committet Aenderungen eines Projekts, gleicht selbst mit GitHub ab und pusht. Bei Projekten mit Build geht der Push auf den Arbeitszweig satanic-dev, nicht auf den Hauptzweig. Mit files nur die genannten Dateien; ohne files alles, was mit 'git add' vorgemerkt ist, und wenn nichts vorgemerkt ist, alle Aenderungen. Hat das Projekt noch kein Repo, wird ein privates angelegt. Wartet danach auf den Build und meldet das Ergebnis.",
      {"project": _S("Projektordner, z.B. Satanic-AI"), "message": _S("kurze Commit-Nachricht"), "files": {"type": "array", "items": {"type": "string"}, "description": "nur diese Dateien pushen (Pfade relativ zum Projekt)"},
       "skip_check": {"type": "boolean", "description": "Syntaxpruefung vor dem Push auslassen. Nur wenn sie nachweislich falsch liegt."},
-      "repo": _S("nur fuer neue Projekte: besitzer/name")}, ["project", "message"]),
+      "repo": _S("nur fuer neue Projekte: besitzer/name"),
+      "wait_build": {"type": "boolean", "description": "nach dem Push auf den Build warten und das Ergebnis melden (Standard true)"}}, ["project", "message"]),
  _fn("build_status", "Wartet auf den GitHub-Actions-Lauf zum letzten Commit des Projekts und liefert Ergebnis, Jobs und bei Fehlern das Log-Ende.",
      {"project": _S("Projektordner"), "wait": {"type": "boolean", "description": "auf das Ende warten (Standard true)"}}, ["project"]),
  _fn("get_build", "Holt die fertig gebauten Dateien (ipa, apk, exe) zum letzten Commit von GitHub und gibt sie dem Nutzer im Chat als Download. Erst nach erfolgreichem build_status aufrufen.",
@@ -2307,6 +2365,31 @@ DEV_TOOLS = [
  _fn("move_path", "Verschiebt oder benennt eine Datei oder einen Unterordner innerhalb der Projekte um.", {"path": _S("Quelle"), "to": _S("Ziel")}, ["path", "to"]),
 ]
 
+TOOL_REQ = {t["function"]["name"]: t["function"]["parameters"].get("required", []) for t in TOOLS + DEV_TOOLS}
+def call_check(c, fr=None):
+    """Prueft einen Werkzeug-Aufruf, bevor er ausgefuehrt wird. Liefert (args, Fehlertext oder None)."""
+    name = c.get("name") or ""
+    try: args = json.loads(c.get("args") or "{}")
+    except Exception: args = None
+    if not isinstance(args, dict):
+        return {}, (f"FEHLER: Die Angaben zu {name or 'diesem Werkzeug'} waren kein gueltiges JSON (vermutlich abgeschnitten, {len(c.get('args') or '')} Zeichen). "
+                    "Es wurde NICHTS ausgefuehrt. Sende den Aufruf neu; grosse Dateien lieber mit edit_file in Teilen aendern statt komplett mit write_file.")
+    if fr == "length":
+        return args, f"FEHLER: Deine Antwort wurde an der Laengengrenze abgeschnitten, die Angaben zu {name} sind unvollstaendig. Es wurde NICHTS ausgefuehrt. Sende den Aufruf neu, mit weniger Inhalt pro Aufruf."
+    if name not in TOOL_REQ:
+        return args, f"FEHLER: Ein Werkzeug '{name}' gibt es nicht. Vorhanden: " + ", ".join(sorted(TOOL_REQ)) + "."
+    miss = [k for k in TOOL_REQ[name] if args.get(k) is None]
+    if miss: return args, f"FEHLER: Bei {name} fehlen Pflichtangaben: {', '.join(miss)}. Es wurde NICHTS ausgefuehrt."
+    return args, None
+
+def step_stat(st, wall):
+    """Kurze Zeitangabe pro Modell-Schritt fuer den Dev-Chat (Werte liefert llama.cpp mit)."""
+    t = st.get("t") or {}
+    if not t: return f"{wall:.1f} s"
+    s = f"{wall:.1f} s · eingelesen {int(t.get('prompt_n') or 0)} Tokens in {(t.get('prompt_ms') or 0) / 1000:.1f} s"
+    if t.get("cache_n"): s += f" (+{int(t['cache_n'])} aus Zwischenspeicher)"
+    return s + f" · geschrieben {int(t.get('predicted_n') or 0)} Tokens in {(t.get('predicted_ms') or 0) / 1000:.1f} s"
+
 def dev_prompt(cfg):
     try: projs = sorted(x for x in os.listdir(PROJECTS) if os.path.isdir(os.path.join(PROJECTS, x)) and not x.startswith("."))[:20]
     except Exception: projs = []
@@ -2328,15 +2411,16 @@ def dev_prompt(cfg):
      "Pruefe vor git_push mit 'git status --short', dass nur gewollte Dateien geaendert sind, oder gib bei git_push files an. "
      "git_clone und git_push gleichen selbst mit GitHub ab: nutze in run nie git push, pull, fetch, merge oder rebase und fasse Zugangsdaten nicht an. "
      "Bei Projekten mit Build pusht git_push auf den Arbeitszweig satanic-dev; in den Hauptzweig uebernehmen kann nur der Nutzer ueber den Link, den git_push nennt. "
-     f"Du hast pro Runde hoechstens {MAX_ITER_DEV} Werkzeug-Schritte, geh sparsam damit um. "
+     f"Du hast pro Auftrag hoechstens {MAX_ITER_DEV * (1 + AUTO_ROUNDS)} Werkzeug-Schritte (nach je {MAX_ITER_DEV} geht es automatisch weiter), geh sparsam damit um. "
      "ARBEITSWEISE: 0) Bei groesseren Auftraegen zuerst einen kurzen Plan mit note festhalten, dann Punkt fuer Punkt umsetzen. Beginne nach wenigen Lese-Schritten mit den Aenderungen, statt immer weiter zu suchen. "
      "Halte mit note fest, was du gefunden hast (Datei, Zeile, Funktionsname), denn aeltere Werkzeug-Ausgaben werden gekuerzt. Wiederhole keinen Befehl, den du schon ausgefuehrt hast. "
      "Lies grosse Dateien nie komplett: erst outline (Gliederung mit Zeilennummern) oder search, dann read_file gezielt ab der Zeile; nicht mit sed oder grep in kleinen Stuecken. Rate keine Dateipfade: nimm nur Pfade aus list_files, search oder den Projekt-Hinweisen. "
      "read_file liest nur im Projektordner, nicht in /tmp. Hilfsdateien gehoeren in den Unterordner _tmp des Projekts (wird nicht gepusht), nie direkt ins Projekt. "
      "1) Erst ansehen, dann aendern: list_files und read_file bzw. search, bevor du eine vorhandene Datei aenderst. "
-     "2) Vorhandene Dateien gezielt mit edit_file aendern (old exakt aus der Datei, ohne Zeilennummern); write_file nur fuer neue Dateien oder komplette Neufassungen. "
+     "2) Vorhandene Dateien gezielt mit edit_file aendern (old exakt aus der Datei, ohne Zeilennummern; mehrere Aenderungen an einer Datei in EINEM Aufruf mit edits); write_file nur fuer neue Dateien oder komplette Neufassungen. "
+     "write_file und edit_file pruefen die Datei sofort auf Syntaxfehler: steht im Ergebnis 'Sofortpruefung: FEHLER', behebe das zuerst. "
      "3) Nach Aenderungen mit check pruefen und Fehler beheben, bevor du pushst; bei Projekten mit Tests zusaetzlich run_tests. "
-     "4) Soll etwas in einem GitHub-Repo geaendert werden: git_clone, Dateien aendern, git_push mit kurzer Commit-Nachricht, danach build_status. Schlaegt der Build fehl, lies das Log, behebe die Ursache und pushe erneut (hoechstens 3 Versuche, dann berichte). "
+     "4) Soll etwas in einem GitHub-Repo geaendert werden: git_clone, Dateien aendern, git_push mit kurzer Commit-Nachricht. git_push wartet selbst auf den Build und meldet das Ergebnis; build_status nur, wenn der Build dann noch lief. Schlaegt der Build fehl, lies das Log, behebe die Ursache und pushe erneut (hoechstens 3 Versuche, dann berichte). "
      "5) Fuehre die noetigen Schritte selbststaendig nacheinander aus und frage nicht fuer jeden Schritt nach. Aendere, loesche oder ueberschreibe aber nichts, was der Nutzer nicht verlangt hat. "
      "Arbeite nur an dem Projekt und den Dateien, um die es im Auftrag geht. Zeigt der Nutzer Code im Chat und fragt nach Fehlern, antworte im Chat; uebernimm ihn nur in ein Projekt, wenn er das ausdruecklich will. "
      "Schlaegt ein Werkzeug fehl, lies die Meldung und aendere den Ansatz, statt dasselbe leicht abgewandelt zu wiederholen. "
@@ -2355,7 +2439,7 @@ def dev_call(name, args, cfg, emit):
     def beat():
         while not stop.wait(15):
             try: emit({"type": "ping"})
-            except Exception: return
+            except Exception: cfg["_halt"] = True; return  # Stopp-Knopf: lange Warte-Werkzeuge (Build) brechen dann ab
     threading.Thread(target=beat, daemon=True).start()
     try:
         r = DEV_FN[name](args, cfg)

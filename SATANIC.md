@@ -7,7 +7,7 @@
 - setup_template.sh: Setup-Skript fuer den Pod (Modelle laden, Dienste starten). Zeilen mit @@EMBED:...@@ nicht anfassen.
 - tools/build_setup.py: baut aus setup_template.sh und chat/ die Datei setup_all.sh. Laeuft im Build automatisch.
 - tools/smoke_test.py: Probelauf des Chat-Servers mit nachgebautem Sprachmodell. Laeuft bei "build_setup.py --check" mit.
-- tools/unit_test.py: Einzeltests (edit_file, Verlauf kuerzen, Dev-Server-Werkzeuge, Bildabgleich). Laeuft bei "build_setup.py --check" mit.
+- tools/unit_test.py: Einzeltests (edit_file, Werkzeug-Pruefung, Sofortpruefung, Auto-Weiter, Build-Warten, Verlauf kuerzen, Dev-Server, Bildabgleich). Laeuft bei "build_setup.py --check" mit.
 - KIStart.swift: Starter-App fuer iPhone (SwiftUI). project.yml gehoert dazu.
 - app.html: Starter-App fuer Android und Windows (eine Datei). main.js, package.json, capacitor.config.json sind die Huelle.
 - .github/workflows/build.yml: baut ipa, apk und exe und legt sie im Release latest-<branch> ab.
@@ -25,7 +25,7 @@
 - Nichts aus Base64 entpacken: alle Quelltexte liegen als normale Dateien vor.
 - Nach jeder Aenderung pruefen: check (Syntax der geaenderten Dateien), dann run_tests (fuehrt "python3 tools/build_setup.py --check" samt Probelauf aus).
 - Setup-Skript: Die App schickt nur ein kleines Start-Skript mit. Das volle Setup-Skript (setup_full.sh) legt der Build auf dem Lizenz-Server ab (Schluessel setup:<branch>), der Pod laedt es von dort mit dem Lizenz-Key (LICENSE_KEY). Die alte Groessengrenze gilt damit nicht mehr. Trotzdem nichts Unnoetiges in chat/ einbauen. Ohne Lizenz-Server in license/config.json steckt das volle Skript wie frueher in der App, dann gilt die Grenze wieder.
-- Fertig heisst: git_push, danach build_status. Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
+- Fertig heisst: git_push (wartet selbst auf den Build und meldet das Ergebnis). Die ipa, apk und exe entstehen dabei automatisch, nichts von Hand uebertragen.
 - git_push geht hier auf den Arbeitszweig satanic-dev, nie auf main. Der Build dazu liegt im Release latest-satanic-dev. Nach main uebernehmen kann nur der Nutzer ueber den Link, den git_push nennt.
 - In run kein git push, pull, fetch, merge oder rebase: git_clone holt den neuesten Stand, git_push gleicht selbst ab. Bei einem Konflikt: git_clone mit fresh=true, dann die Aenderung neu einbauen.
 - .github/workflows nur aendern, wenn der Nutzer es ausdruecklich verlangt.
@@ -44,3 +44,4 @@
 - Loeschen, Verschieben, Umbenennen: mit run (rm, mv). Letzten Commit zuruecknehmen: run "git revert --no-edit HEAD", danach git_push.
 - Grosse Dateien (chat/server.py, chat/index.html, KIStart.swift, app.html) nie komplett lesen: erst outline oder search, dann read_file ab der gefundenen Zeile. Funde mit note festhalten.
 - chat/server.py darf nur die Python-Standardbibliothek nutzen (auf dem Pod wird nichts nachinstalliert). Einzige Ausnahme: der Bildabgleich des Bild-Servers (keep_original, _align, _match_color) nutzt Pillow und numpy aus ComfyUI und faellt ohne sie auf das alte Verhalten zurueck.
+- llama.cpp ist im Setup auf eine feste Version gesetzt (LLAMA_TAG in setup_template.sh). Aktualisieren nur bewusst und danach testen.

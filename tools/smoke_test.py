@@ -40,6 +40,9 @@ class FakeLLM(BaseHTTPRequestHandler):
             ev({"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "list_files", "arguments": "{}"}}]})
         else:
             ev({"content": "Probelauf bestanden."})
+        # Schluss-Paket wie bei llama.cpp: Abbruchgrund und Zeitwerte
+        self.wfile.write(b"data: " + json.dumps({"choices": [{"delta": {}, "finish_reason": "tool_calls" if want_tool else "stop"}],
+                                                 "timings": {"prompt_n": 42, "prompt_ms": 100, "cache_n": 7, "predicted_n": 5, "predicted_ms": 50}}).encode() + b"\n\n")
         self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush(); self.close_connection = True
 
 
@@ -109,6 +112,8 @@ def main():
         txt = "".join(e.get("text", "") for e in evs if e.get("type") == "delta")
         say(any(e.get("type") == "tool" for e in evs) and "Probelauf bestanden" in txt and not any(e.get("type") in ("error", "step") for e in evs),
             "Werkzeug-Schritt im Dev-Modus laeuft durch", json.dumps(evs)[:600])
+        say(any(e.get("type") == "stat" and "eingelesen 42 Tokens" in e.get("text", "") for e in evs),
+            "Zeitmessung im Dev-Modus kommt an", json.dumps([e for e in evs if e.get("type") == "stat"])[:300])
 
         evs = chat({"messages": [{"role": "user", "text": "WERKZEUG bitte", "images": []}], "imgopts": {}, "dev": True, "devkey": "falsch"})
         say(any(e.get("type") == "error" for e in evs), "Dev-Modus ohne gueltiges Passwort bleibt gesperrt")
