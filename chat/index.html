@@ -221,7 +221,7 @@ function render(){setTimeout(ctxUpd,0);
     if(m.role==='assistant'&&m.images)m.images.forEach(x=>d.appendChild(imgTag(x)));
     if(m.role==='assistant'&&m.files)m.files.forEach(f=>d.appendChild(fileTag(f)));
   }scroll()}
-async function status(){try{const s=await (await fetch('/api/status')).json();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
+async function status(){try{const s=await (await fetch('/api/status')).json();if(s.devlocked)lockDev();$('#st').textContent=(s.llm?'LLM ✓ ':'LLM … ')+(s.comfy?'Bild ✓':'Bild …')+(s.idle_left!=null?' · Aus in '+s.idle_left+' Min':'');$('#mdl').style.display=s.fast?'':'none';if(!s.fast)$('#mdl').value=''}catch(e){}}
 status();setInterval(status,15000);
 
 function loadImg(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src})}
@@ -280,13 +280,15 @@ try{$('#othk').checked=localStorage.getItem('think')==='1';$('#olora').value=loc
 function optMark(){$('#opt').style.outline=($('#othk').checked||$('#olora').value||$('#odev').checked)?'2px solid #c9a227':'none'}
 $('#othk').onchange=()=>{try{localStorage.setItem('think',$('#othk').checked?'1':'0')}catch(e){}optMark()};
 $('#olora').onchange=()=>{try{localStorage.setItem('lora',$('#olora').value)}catch(e){}optMark()};
-let devKey='',devSet=false,devOpenOk=false;try{devKey=localStorage.getItem('devkey')||''}catch(e){}
+let devKey='',devSet=false,devOpenOk=false,devLocked=false;
+function lockDev(){if(devLocked)return;devLocked=true;devKey='';try{localStorage.setItem('dev','0');localStorage.removeItem('devkey')}catch(e){}$('#odev').checked=false;$('#odev').disabled=true;
+  for(const r of [$('#odev').closest('label'),$('#odevs')]){if(!r)continue;r.style.opacity='.4';r.style.pointerEvents='none';const sm=r.querySelector('small');if(sm)sm.textContent='In dieser Version nicht verfügbar'}optMark()}try{devKey=localStorage.getItem('devkey')||''}catch(e){}
 try{$('#odev').checked=localStorage.getItem('dev')==='1'&&!!devKey}catch(e){}
 function devOn(v){$('#odev').checked=v;try{localStorage.setItem('dev',v?'1':'0')}catch(e){}optMark()}
 async function devApi(b){const r=await fetch('/api/dev',{method:'POST',body:JSON.stringify(b)});const j=await r.json();if(!r.ok)throw new Error(j.error||'Fehler');return j}
 function devFill(s){devOpenOk=true;$('#drepo').value=s.repo||'';$('#dbr').value=s.branch||'';
   return (s.has_token?'GitHub-Token gespeichert'+(s.login?' ('+s.login+')':''):'Noch kein GitHub-Token gespeichert')+'.'+(s.shell?'':'\n⚠️ Befehle ausführen ist auf diesem Server nicht verfügbar.')+(s.sealed===false?'\n⚠️ Auf diesem Server greifen Dateirechte nicht. Der Token ist deshalb verschlüsselt gespeichert.':s.sealed===true?'\n🔒 Speicher ist gegen die Shell abgeschottet.':'')}
-async function devOpen(){$('#dev').classList.add('on');$('#dkey').value=devKey;$('#dtok').value='';devOpenOk=false;const m=$('#dmsg');m.textContent='…';
+async function devOpen(){if(devLocked)return;$('#dev').classList.add('on');$('#dkey').value=devKey;$('#dtok').value='';devOpenOk=false;const m=$('#dmsg');m.textContent='…';
   try{const s=await devApi({action:'status',key:devKey});devSet=!!s.set;
     if(!s.set)m.textContent='Noch kein Dev-Passwort festgelegt. Lege jetzt eines fest (mindestens 8 Zeichen) und tippe auf Speichern.';
     else if(!s.ok)m.textContent='Dev-Passwort eingeben und auf Speichern tippen, um den Dev-Modus auf diesem Server freizuschalten.';
@@ -301,7 +303,7 @@ $('#dsave').onclick=async()=>{const m=$('#dmsg'),k=$('#dkey').value;m.textConten
     const s=await devApi(b);devKey=k;devSet=true;devOpenOk=true;try{localStorage.setItem('devkey',k)}catch(e){}$('#dtok').value='';devOn(true);
     m.textContent='✓ '+(s.note||'Gespeichert')+'\nDev-Modus ist eingeschaltet.'}
   catch(e){m.textContent='Fehler: '+e.message}};
-$('#odev').onchange=()=>{if($('#odev').checked&&!devKey){$('#odev').checked=false;devOpen();return}devOn($('#odev').checked)};
+$('#odev').onchange=()=>{if(devLocked){$('#odev').checked=false;return}if($('#odev').checked&&!devKey){$('#odev').checked=false;devOpen();return}devOn($('#odev').checked)};
 optMark();
 const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
 if(SR){$('#mic').style.display='';let rec=null,on=false;$('#mic').onclick=()=>{
@@ -376,7 +378,7 @@ async function runAssistant(regenId,resumeJid){
     shown=Math.min(a.text.length,shown+Math.max(1,Math.ceil(back/40)));rich(tn,clean(a.text).slice(0,Math.max(0,shown)));tn.appendChild(cur);scroll();timer=setTimeout(step,22)}
   function kick(){if(!timer)timer=setTimeout(step,0)}
   try{
-    const body={messages:payload().slice(0,-1),fast:$('#mdl').value==='fast',imgopts:imgopts(),think:$('#othk').checked,job:jid};if($('#odev').checked&&devKey){body.dev=true;body.devkey=devKey}if(regenId)body.regen=regenId;
+    const body={messages:payload().slice(0,-1),fast:$('#mdl').value==='fast',imgopts:imgopts(),think:$('#othk').checked,job:jid};if($('#odev').checked&&devKey&&!devLocked){body.dev=true;body.devkey=devKey}if(regenId)body.regen=regenId;
     let next=0,fin=false,lost=null,mode=resumeJid?'get':'post',confirmed=!!resumeJid,fails=0;
     let lostT=null,bk=null,srvNow=0,reconn=false;
     const setLost=v=>{if(v){if(!lost&&!lostT)lostT=setTimeout(()=>{lostT=null;lost=document.createElement('div');lost.className='tool';lost.textContent='⏳ Keine Verbindung zum Server – versuche es weiter. Der Auftrag läuft dort weiter.';bub.appendChild(lost);scroll()},4000)}

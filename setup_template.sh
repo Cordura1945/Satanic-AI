@@ -198,5 +198,5 @@ fi
 
 echo "=== Chat-App starten (Port 8000) ==="
 pkill -f status.py; sleep 1
-cd /workspace/chatapp && nohup python server.py > /workspace/chatapp.log 2>&1 &
+cd /workspace/chatapp && DEV_LOCKED=1 nohup python server.py > /workspace/chatapp.log 2>&1 &  # Kunden-Version: ohne Dev-Modus
 echo "FERTIG. CHAT: Port 8000 (alles in einem). ComfyUI: 8818. Nur-LLM-Chat: 8080. Warte 2-3 Min, bis oben LLM ✓ und Bild ✓ steht."

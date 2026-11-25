@@ -5,6 +5,7 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 LLM = os.environ.get("LLM_URL", "http://127.0.0.1:8080")
+DEV_LOCKED = os.environ.get("DEV_LOCKED") == "1"  # Kunden-Version: Dev-Modus komplett abgeschaltet
 LLM_FAST = os.environ.get("LLM_FAST_URL", "http://127.0.0.1:8081")
 COMFY = os.environ.get("COMFY_URL", "http://127.0.0.1:8818")
 PORT = int(os.environ.get("APP_PORT", "8000"))
@@ -1249,6 +1250,7 @@ def tok_open(key, blob):
     except Exception: return ""
 def dev_unlock(key):
     """Prueft das Dev-Passwort. Liefert die Einstellungen mit entschluesseltem Token (nur im Speicher) oder None."""
+    if DEV_LOCKED: return None
     c = dev_load()
     if not c.get("hash") or not isinstance(key, str) or not key: return None
     h, k = _derive(key, c.get("salt", ""))
@@ -1922,6 +1924,7 @@ def compact(msgs, budget=60000):
         total -= before - size(m)
 
 def dev_api(d):
+    if DEV_LOCKED: raise PermissionError("Der Dev-Modus ist in dieser Version nicht verfuegbar.")
     c = dev_load(); act = d.get("action") or "status"; key = d.get("key")
     if act == "status":
         u = dev_unlock(key) if c.get("hash") and key else None
@@ -1986,7 +1989,7 @@ def job_run(j, req_j, msgs, fast, notools, opts, regen, think):
             for i in tool_generate({"prompt": p}, opts): emit({"type": "image", "id": i})
         else:
             dev = None
-            if req_j.get("dev") and not notools:
+            if req_j.get("dev") and not notools and not DEV_LOCKED:
                 dev = dev_unlock(req_j.get("devkey"))
                 if dev is None: raise ValueError("Dev-Modus gesperrt: Dev-Passwort fehlt oder ist falsch (opt > Dev-Einstellungen).")
             chat(msgs, emit, fast, not notools, opts, think, dev)
@@ -2045,7 +2048,7 @@ class H(BaseHTTPRequestHandler):
             for n, url in (("llm", LLM + "/health"), ("fast", LLM_FAST + "/health"), ("comfy", COMFY + "/system_stats")):
                 try: http("GET", url, timeout=3); st[n] = True
                 except Exception: st[n] = False
-            st["idle_left"] = idle_left()
+            st["idle_left"] = idle_left(); st["devlocked"] = DEV_LOCKED
             return self._send(200, st)
         self._send(404, {"error": "nicht gefunden"})
     def _stream(self, jid, j, i):
