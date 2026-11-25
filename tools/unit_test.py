@@ -139,18 +139,45 @@ def test_dev_loop(S, proj):
     say("b = 20" in open(p).read(), "edit_file: edits auch als JSON-Text", r)
     S.SHELL_OK = False
 
-    # 4) Auto-Weiter: nach MAX_ITER_DEV Schritten geht es von selbst weiter, am Ende kommt der Abschlussbericht
+    # 4) Auto-Weiter nur bei Fortschritt, Schleifen-Bremse, Denkmodus
     S.MAX_ITER_DEV, S.AUTO_ROUNDS = 3, 2
-    n = [0]; final = []
-    def busy(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
-        if not tools: final.append(messages[-1]["content"]); return "Bericht", []
-        n[0] += 1
-        return "", [{"id": "n%d" % n[0], "name": "note", "args": json.dumps({"text": "Schritt %d" % n[0]})}]
-    S.llm_stream = busy; evs = []
-    S.chat([{"role": "user", "text": "los", "images": []}], evs.append, dev={"repo": "", "token": ""})
-    cont = [ev for ev in evs if ev.get("type") == "stat" and "automatisch weiter" in ev.get("text", "")]
-    say(n[0] == 9 and len(cont) == 2 and final and "Schrittlimit" in final[0], "Auto-Weiter: 2 zusaetzliche Runden, danach Abschlussbericht", (n[0], len(cont)))
+    def scripted(make):
+        n = [0]; final = []; thinks = []
+        def fake(messages, emit, fast=False, tools=True, think=False, temp=0.7, tool_list=None, stats=None):
+            if not tools: final.append(messages[-1]["content"]); return "Bericht", []
+            thinks.append(think); n[0] += 1
+            return "", [make(n[0])]
+        S.llm_stream = fake; evs = []
+        S.chat([{"role": "user", "text": "los", "images": []}], evs.append, dev={"repo": "", "token": ""})
+        return n[0], final, thinks, [ev.get("text", "") for ev in evs if ev.get("type") == "stat"]
+    n, final, thinks, stats = scripted(lambda k: {"id": "w%d" % k, "name": "write_file", "args": json.dumps({"path": "demo/auto%d.txt" % k, "content": "x"})})
+    say(n == 9 and sum("automatisch weiter" in t for t in stats) == 2 and final and "Schrittlimit" in final[0], "Auto-Weiter mit Fortschritt: 2 zusaetzliche Runden, danach Bericht", (n, stats[-3:]))
+    say(thinks and all(thinks), "Dev-Modus arbeitet mit Denkmodus", thinks[:3])
+    n, final, thinks, stats = scripted(lambda k: {"id": "n%d" % k, "name": "note", "args": json.dumps({"text": "nur Notiz %d" % k})})
+    say(n == 3 and final and "nichts geaendert" in final[0] and any("Kein Fortschritt" in t for t in stats), "ohne Fortschritt: kein Auto-Weiter, sondern Bericht", (n, stats[-2:]))
+    S.MAX_ITER_DEV = 10  # damit die Bremse vor der Fortschritts-Pruefung greift
+    n, final, thinks, stats = scripted(lambda k: {"id": "l%d" % k, "name": "list_files", "args": json.dumps({"path": "demo"})})
+    say(n == 5 and final and "im Kreis" in final[0] and any("abgelehnte Wiederholungen" in t for t in stats), "Schleifen-Bremse: nach 3 abgelehnten Wiederholungen Bericht statt weiter", (n, stats[-2:]))
+    n, final, thinks, stats = scripted(lambda k: {"id": "f%d" % k, "name": "read_file", "args": json.dumps({"path": "demo/gibts-nicht-%d.py" % k})})
+    say(n == 6 and final and "Fehler in Folge" in final[0], "Schleifen-Bremse: nach 6 Fehlern in Folge Bericht", (n, stats[-2:]))
     S.MAX_ITER_DEV, S.AUTO_ROUNDS = 60, 2
+
+    # 4b) test_server und Hinweis bei run mit &
+    S.SHELL_OK = True
+    web = os.path.join(proj, "demo", "web"); os.makedirs(web, exist_ok=True); open(os.path.join(web, "index.html"), "w").write("<h1>hallo satanic</h1>")
+    import socket as _so
+    sk = _so.socket(); sk.bind(("127.0.0.1", 0)); port = sk.getsockname()[1]; sk.close()
+    r = S.t_serve({"command": f"{sys.executable} -m http.server {port} --bind 127.0.0.1", "port": port, "paths": ["/", "/fehlt"], "cwd": "demo/web"}, {})
+    def up():
+        try: _so.create_connection(("127.0.0.1", port), timeout=1).close(); return True
+        except OSError: return False
+    say("Server antwortet" in r and "HTTP 200" in r and "hallo satanic" in r and "HTTP 404" in r and not up(), "test_server: startet, ruft Seiten ab, beendet den Server danach", r[:400])
+    r = S.t_serve({"command": "echo kaputt >&2; exit 3", "port": port, "cwd": "demo"}, {})
+    say("beendet (exit=3)" in r and "kaputt" in r, "test_server: abgestuerzter Server wird mit Log gemeldet", r[:300])
+    say("test_server" in S.t_run({"command": "sleep 0 &", "cwd": "demo"}, {}) and "test_server" not in S.t_run({"command": "echo a 2>&1 && echo b", "cwd": "demo"}, {}),
+        "run: Hinweis nur bei echtem Hintergrund-Prozess (&)")
+    say("belegt" in (fails(lambda: S.t_serve({"command": "true", "port": 8000}, {})) or ""), "test_server: Ports des Chat-Servers sind gesperrt")
+    S.SHELL_OK = False
 
     # 5) git_push wartet auf den Build, wenn das Projekt einen Workflow hat
     d = os.path.join(proj, "demo")
@@ -160,6 +187,45 @@ def test_dev_loop(S, proj):
     r = S._push_build({"project": "demo"}, {}, d)
     say("BUILD-ERGEBNIS" in r and "success" in r, "mit Workflow: git_push meldet das Build-Ergebnis", r)
     say(S._push_build({"project": "demo", "wait_build": False}, {}, d) == "", "wait_build=false: git_push wartet nicht")
+
+
+def test_setup_devmodel(tmp):
+    """Setup-Skript: Dev-Modell 27B / Flash-Next mit nachgebautem Hugging Face (kein Download)."""
+    src = open(os.path.join(ROOT, "setup_template.sh"), encoding="utf-8").read()
+    py = src.split("python - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    root = os.path.join(tmp, "ws"); fake = os.path.join(tmp, "fakehf", "huggingface_hub"); os.makedirs(fake)
+    open(os.path.join(fake, "__init__.py"), "w").write(
+        "import os, json\n"
+        "R = json.loads(os.environ['FAKE_HF'])\n"
+        "def list_repo_files(repo, token=None):\n"
+        "    v = R.get(repo)\n"
+        "    if v is None: raise RuntimeError('403 gated')\n"
+        "    return v\n"
+        "def hf_hub_download(repo, f, local_dir=None, token=None):\n"
+        "    p = os.path.join(local_dir, f); os.makedirs(os.path.dirname(p), exist_ok=True)\n"
+        "    open(p, 'wb').write(b'x' * 2000000)\n"
+        "    open(os.environ['FAKE_LOG'], 'a').write(repo + ' ' + f + '\\n'); return p\n")
+    script = os.path.join(tmp, "setup_py.py"); open(script, "w").write(py.replace("/workspace", root))
+    import subprocess
+    def run(model, repos):
+        log = os.path.join(tmp, "dl.log"); open(log, "w").close()
+        os.makedirs(os.path.join(root, "models", "llm"), exist_ok=True)
+        open(os.path.join(root, "models", "llm", "huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf"), "w").write("alt")
+        env = dict(os.environ, HF_TOKEN="hf_test", DEV_SERVER="1", DEV_MODEL=model, FAKE_HF=json.dumps(repos), FAKE_LOG=log, PYTHONPATH=os.path.dirname(fake))
+        r = subprocess.run([sys.executable, script], env=env, capture_output=True, text=True, timeout=60)
+        mp = os.path.join(root, "models", "llm", "dev_model.txt")
+        return r.stdout + r.stderr, (open(mp).read() if os.path.exists(mp) else ""), open(log).read().split()
+    R27 = {"orcarouter/Qwen3.8-27B-Uncensored-GGUF": ["Qwen3.8-27B-Uncensored-Q4_K_M.gguf", "Qwen3.8-27B-Uncensored-Q6_K.gguf", "Qwen3.8-27B-Uncensored-Q6_K-mtp.gguf", "mmproj-F16.gguf"]}
+    out, path, dl = run("27b", R27)
+    say(path.endswith("dev27b/Qwen3.8-27B-Uncensored-Q6_K.gguf") and not os.path.exists(os.path.join(root, "models", "llm", "huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf")),
+        "Setup 27B: Q6_K gewaehlt (ohne mtp/mmproj), altes Dev-Modell entfernt", out[-600:])
+    shards = ["Q4_K_M/Flash-Q4_K_M-0000%d-of-00003.gguf" % i for i in (1, 2, 3)]
+    RF = dict(R27, **{"huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-GGUF": shards + ["Q8_0/Flash-Q8_0-00001-of-00004.gguf"]})
+    out, path, dl = run("flash", RF)
+    say(path.endswith(shards[0]) and sum(1 for x in dl if "Q4_K_M/" in x) == 3 and not any("Q8_0" in x for x in dl),
+        "Setup Flash-Next: alle 3 Teile der 4-Bit-Fassung geladen, Pfad zum ersten Teil", out[-600:])
+    out, path, dl = run("flash", R27)
+    say(path.endswith("Qwen3.8-27B-Uncensored-Q6_K.gguf") and "nehme stattdessen Qwen3.8-27B" in out, "Setup Flash-Next nicht ladbar: Rueckfall auf 27B", out[-600:])
 
 
 def test_images(S):
@@ -216,6 +282,7 @@ def main():
         test_compact(S)
         test_devserver(S)
         test_dev_loop(S, os.environ["PROJECTS"])
+        test_setup_devmodel(tmp)
         test_images(S)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

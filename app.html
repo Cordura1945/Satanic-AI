@@ -67,14 +67,17 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <div class="card sel" id="m_demand" onclick="setMode('demand')"><b>(*) On Demand</b><div class="s">Alles wird bei jedem Start komplett neu heruntergeladen (ca. 10–25 Min Wartezeit, ca. 37 GB). Kein Dauerpreis, du zahlst nur die GPU-Zeit. Die Wartezeit kostet ca. $0.10–0.30 pro Start.</div></div>
   <div class="card" id="m_volume" onclick="setMode('volume')" style="margin-top:14px"><b>( ) Network Volume</b><div class="s" id="volText"></div></div>
   <div class="card" id="m_img" onclick="setMode('img')" style="margin-top:14px"><b>( ) Bild-Server</b><div class="s">Eigener Server nur zum Bilder-Bearbeiten: bestes offenes Modell (Qwen-Image-Edit) auf einer 48-GB-GPU, blauer Bild-Chat. Bild hochladen, sagen was anders soll, fertiges Bild kommt zurück. Lädt bei jedem Start neu (ca. 10–20 Min). Kostet ab ca. $0.59/h, eigenes Preislimit ($0.80) in den Einstellungen.</div></div>
-  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Ohne Volume lädt jeder Start alles neu (ca. 15–30 Min), mit eigenem Dev-Volume nur der erste. Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.</div></div>
+  <div class="card" id="m_dev" onclick="setMode('dev')" style="margin-top:14px"><b>( ) Dev-Server</b><div class="s">Eigener Server nur zum Programmieren, unzensiert, mit Dev-Modus und grüner Dev Zone, ohne Bildteil. Modell wählbar: Qwen3.8-27B auf einer 48-GB-GPU (ab ca. $0.40/h) oder Qwen3.8-Flash-Next, das stärkste offene Modell, auf 2× 80 GB oder einer H200 (ab ca. $2.40/h). Ohne Volume lädt jeder Start alles neu, mit eigenem Dev-Volume nur der erste. Preislimits in den Einstellungen.</div></div>
   <div class="card" id="devCard" style="display:none;margin-top:14px">
+   <div style="color:#fff;font-weight:700;font-size:13px">Dev-Modell</div>
+   <div id="dm_27b" onclick="setDevModel('27b')" style="cursor:pointer;margin-top:8px"><b></b><div class="s" id="dm_27b_s"></div></div>
+   <div id="dm_flash" onclick="setDevModel('flash')" style="cursor:pointer;margin:8px 0 14px"><b></b><div class="s" id="dm_flash_s"></div></div>
    <label style="margin-top:0;display:flex;gap:10px;align-items:center;color:#fff;font-weight:700;font-size:13px;cursor:pointer"><input type="checkbox" id="devVol" style="width:auto;margin:0;padding:0"> Network Volume für den Dev-Server</label>
    <div class="s" id="devVolOff" style="margin-top:8px">Aus: On Demand, bei jedem Start wird alles neu geladen.</div>
    <div id="devVolBox"><div class="s" id="devVolInfo" style="margin-top:8px"></div>
     <button class="lnk red" id="delDevVol" onclick="delVol(true)" style="display:none">[x] Dev-Volume löschen</button>
-    <div id="devVolSize"><label>Größe (GB)<input id="devVolGB" type="number" min="55" max="200" step="5"></label><label>Rechenzentrum<input id="devDc" autocapitalize="characters" autocorrect="off"></label></div>
-    <div class="s" style="margin-top:8px">Eigenes Volume „ki-dev-vol“: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.</div></div>
+    <div id="devVolSize"><label id="devVolGBL">Größe (GB)<input id="devVolGB" type="number" min="55" max="200" step="5"></label><label id="devMaxVolGBL">Größe (GB, Flash-Next braucht mind. 150)<input id="devMaxVolGB" type="number" min="150" max="400" step="10"></label><label>Rechenzentrum<input id="devDc" autocapitalize="characters" autocorrect="off"></label></div>
+    <div class="s" style="margin-top:8px">Eigenes Volume „<span id="devVolName">ki-dev-vol</span>“ für dieses Modell: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.</div></div>
   </div>
   <div class="card" id="volCard" style="display:none;margin-top:14px"><div class="s" id="volInfo"></div>
    <button class="lnk red" id="delVol" onclick="delVol()" style="display:none">[x] Volume löschen</button>
@@ -106,7 +109,8 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
   <label>Vast.ai API-Key (Ersatz, optional)<input id="vastKey" type="password" autocomplete="off"></label>
   <label>Hugging-Face-Token<input id="hfToken" type="password" autocomplete="off"></label>
   <label>Max. Preis ($/h, 0 = aus)<input id="maxPrice" type="number" step="0.05" min="0" max="3"></label>
-  <label>Max. Preis Dev-Server ($/h, 0 = aus)<input id="devMaxPrice" type="number" step="0.05" min="0" max="6"></label>
+  <label>Max. Preis Dev-Server 27B ($/h, 0 = aus)<input id="devMaxPrice" type="number" step="0.05" min="0" max="6"></label>
+  <label>Max. Preis Dev-Server Flash-Next ($/h, 0 = aus)<input id="devMaxPriceFlash" type="number" step="0.10" min="0" max="12"></label>
   <label>Max. Preis Bild-Server ($/h, 0 = aus)<input id="imgMaxPrice" type="number" step="0.05" min="0" max="4"></label>
   <label>Auto-Beenden (Stunden, 0 = aus)<input id="autoStop" type="number" min="0" max="48"></label>
   <label>Leerlauf-Abschaltung (Minuten, 0 = aus)<input id="idleStop" type="number" min="0" max="240" step="5"></label>
@@ -127,10 +131,13 @@ details>summary::after{content:"+";color:var(--gold);font-weight:700}details[ope
 <script>
 const $=id=>document.getElementById(id), LS=localStorage;
 const GL="NVIDIA A40\nNVIDIA RTX A6000\nNVIDIA L40S\nNVIDIA L40\nNVIDIA RTX 6000 Ada Generation";
-const GLD=["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"];var dzSeen=false;
-const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"1.25",imgMaxPrice:"0.80",devVol:"0",devVolGB:"60",devDc:"EU-RO-1",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
+// Dev-Server: "Nx " vor dem Namen heisst N GPUs im Pod. 27B passt auf eine 48-GB-GPU, Flash-Next braucht ca. 130 GB.
+const GLD27=["NVIDIA A40","NVIDIA RTX A6000","NVIDIA L40","NVIDIA L40S","NVIDIA RTX 6000 Ada Generation","NVIDIA A100 80GB PCIe","NVIDIA A100-SXM4-80GB"];
+const GLDF=["3x NVIDIA A40","3x NVIDIA RTX A6000","2x NVIDIA A100 80GB PCIe","2x NVIDIA A100-SXM4-80GB","NVIDIA H200","2x NVIDIA H100 PCIe","2x NVIDIA H100 80GB HBM3","3x NVIDIA L40S"];var dzSeen=false;
+const D={apiKey:"",vastKey:"",hfToken:"",maxPrice:"0.6",devMaxPrice:"1.25",devMaxPriceFlash:"4.00",devModel:"27b",devMaxVolGB:"160",imgMaxPrice:"0.80",devVol:"0",devVolGB:"60",devDc:"EU-RO-1",autoStop:"8",idleStop:"30",disk:"100",dc:"EU-RO-1",volGB:"60",mode:"demand",gpus:GL,image:"runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",licenseKey:""};
 const g=k=>LS.getItem("ks_"+k)??D[k], s=(k,v)=>LS.setItem("ks_"+k,String(v));
-for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","imgMaxPrice","autoStop","idleStop","disk","dc","volGB","devVolGB","devDc","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
+const devFlash=()=>g("devModel")==="flash", devVolName=()=>devFlash()?"ki-devmax-vol":"ki-dev-vol";
+for(const k of ["apiKey","vastKey","hfToken","maxPrice","devMaxPrice","devMaxPriceFlash","devMaxVolGB","imgMaxPrice","autoStop","idleStop","disk","dc","volGB","devVolGB","devDc","image","licenseKey"]){const e=$(k);e.value=g(k);e.addEventListener("input",()=>{s(k,e.value);if(k==="volGB")volTxt()})}
 function ext(u){try{if(window.Capacitor&&Capacitor.Plugins.Browser){Capacitor.Plugins.Browser.open({url:u});return false}}catch(e){}return true}
 function msg(t){$("msg").textContent=t||""}
 /* ---- RunPod ---- */
@@ -150,10 +157,11 @@ async function rest(method,path,body){
 const q=JSON.stringify;
 function licKey(){return String(g("licenseKey")||"").trim().toUpperCase()}
 function deploy(gpu,vol,dcid,b64,n,dev,img){
+  const fl=dev&&devFlash();
   const cmd='bash -c "mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity"';
-  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}${dev?`,{key:${q("DEV_SERVER")},value:${q("1")}}`:""}${img?`,{key:${q("IMG_SERVER")},value:${q("1")}}`:""},{key:${q("LICENSE_KEY")},value:${q(licKey())}}]`;
+  const env=`[{key:${q("HF_TOKEN")},value:${q(g("hfToken"))}},{key:${q("AUTO_STOP_H")},value:${q(String(g("autoStop")))}},{key:${q("IDLE_STOP_MIN")},value:${q(String(g("idleStop")))}},{key:${q("SETUP_B64")},value:${q(b64)}}${dev?`,{key:${q("DEV_SERVER")},value:${q("1")}},{key:${q("DEV_MODEL")},value:${q(g("devModel"))}}`:""}${img?`,{key:${q("IMG_SERVER")},value:${q("1")}}`:""},{key:${q("LICENSE_KEY")},value:${q(licKey())}}]`;
   let v="";if(vol){v=`networkVolumeId:${q(vol)},`;if(dcid)v+=`dataCenterId:${q(dcid)},`}
-  return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:${n||1},volumeInGb:0,containerDiskInGb:${Math.max(parseInt(g("disk"))||100,dev?80:(img?60:0))},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
+  return `mutation{podFindAndDeployOnDemand(input:{${v}cloudType:ALL,gpuCount:${n||1},volumeInGb:0,containerDiskInGb:${Math.max(parseInt(g("disk"))||100,dev?(fl?200:80):(img?60:0))},minVcpuCount:2,minMemoryInGb:15,gpuTypeId:${q(gpu)},name:"ki-chat",imageName:${q(g("image"))},dockerArgs:${q(cmd)},ports:"8000/http",env:${env}}){id costPerHr machineId}}`;
 }
 /* ---- Zustand ---- */
 let S={prov:"rp",phase:"none",podId:null,pct:0,shown:0,upMin:0,volId:null,volInfo:"",devVolId:null,devVolInfo:"",chatURL:null,info:"",step:"",log:[],eta:"",busy:false,bal:null,spend:0};
@@ -231,7 +239,7 @@ async function pollRP(){
     S.bal=me.clientBalance;S.spend=me.currentSpendPerHr||0;
     const v=(me.networkVolumes||[]).find(x=>x.name==="ki-chat-vol");
     if(v){S.volId=v.id;S.volInfo=`${v.size} GB · ${v.dataCenterId||"?"} · ca. $${(v.size*.07).toFixed(2)}/Monat`}else{S.volId=null;S.volInfo=""}
-    const dv=(me.networkVolumes||[]).find(x=>x.name==="ki-dev-vol");
+    const dv=(me.networkVolumes||[]).find(x=>x.name===devVolName());
     if(dv){S.devVolId=dv.id;S.devVolInfo=`${dv.size} GB · ${dv.dataCenterId||"?"} · ca. $${(dv.size*.07).toFixed(2)}/Monat`}else{S.devVolId=null;S.devVolInfo=""}
     const pod=(me.pods||[]).find(p=>p.name==="ki-chat"&&p.desiredStatus==="RUNNING");
     if(!pod){idle();return false}
@@ -303,7 +311,7 @@ async function start(skipLic){
   S.busy=true;draw();
   try{
     let vol=null,dcid=null;
-    const dm=g("mode")==="dev",vName=dm?"ki-dev-vol":"ki-chat-vol",vDc=dm?String(g("devDc")).trim().toUpperCase():g("dc"),vGB=parseInt(g(dm?"devVolGB":"volGB"))||60;
+    const dm=g("mode")==="dev",vName=dm?devVolName():"ki-chat-vol",vDc=dm?String(g("devDc")).trim().toUpperCase():g("dc"),vGB=parseInt(g(dm?(devFlash()?"devMaxVolGB":"devVolGB"):"volGB"))||60;
     if((g("mode")==="volume"||(dm&&g("devVol")==="1"))&&g("apiKey")){
       msg("Network Volume wird vorbereitet…");
       const {data:d0}=await gql("query{myself{networkVolumes{id name size dataCenterId}}}");
@@ -316,9 +324,9 @@ async function start(skipLic){
       }
     }
     const GLI=["NVIDIA A40","NVIDIA RTX A6000","NVIDIA L40","NVIDIA L40S","NVIDIA RTX 6000 Ada Generation","NVIDIA A100 80GB PCIe","NVIDIA A100-SXM4-80GB"];
-    const dev=g("mode")==="dev",img=g("mode")==="img",errs=[],over=[],maxP=parseFloat(g(img?"imgMaxPrice":dev?"devMaxPrice":"maxPrice"))||0;
-    for(const en of (g("apiKey")?(img?GLI:dev?GLD:g("gpus").split("\n")):[]).map(x=>x.trim()).filter(Boolean)){
-      const n=en.startsWith("2x ")?2:1,gp=n===2?en.slice(3):en;
+    const dev=g("mode")==="dev",img=g("mode")==="img",errs=[],over=[],maxP=parseFloat(g(img?"imgMaxPrice":dev?(devFlash()?"devMaxPriceFlash":"devMaxPrice"):"maxPrice"))||0;
+    for(const en of (g("apiKey")?(img?GLI:dev?(devFlash()?GLDF:GLD27):g("gpus").split("\n")):[]).map(x=>x.trim()).filter(Boolean)){
+      const mm=/^(\d+)x (.+)$/.exec(en),n=mm?(parseInt(mm[1])||1):1,gp=mm?mm[2]:en;
       if((SKIP[en]||0)>Date.now()){over.push(en);continue}
       msg("Versuche "+en+"…");
       try{
@@ -329,8 +337,8 @@ async function start(skipLic){
           if(maxP>0&&c>maxP){try{await gql(`mutation{podTerminate(input:{podId:${q(p.id)}})}`)}catch(e){}errs.push(`${en}: $${c.toFixed(2)}/h > Limit, Pod wieder beendet`);SKIP[en]=Date.now()+600000;over.push(`${en} ($${c.toFixed(2)}/h)`);continue}
           S.podId=p.id;LS.setItem("ks_gpuUsed",gp);msg("Pod erstellt: "+gp);await poll();return;
         }
-        errs.push(gp+": "+(err||"keine Antwort"));
-      }catch(e){errs.push(gp+": "+e.message)}
+        errs.push(en+": "+(err||"keine Antwort"));
+      }catch(e){errs.push(en+": "+e.message)}
     }
     if(g("vastKey")&&!dev&&!img){await startVast(window.SETUP_B64,errs);return}
     msg((over.length?`Über deinem Preislimit von $${maxP.toFixed(2)}/h und deshalb ausgelassen: ${over.join(", ")}. Limit in den Einstellungen erhöhen, wenn du sie nutzen willst.\n\n`:"")+"Keine GPU frei oder Fehler:\n"+errs.join("\n"));RETRY=true;
@@ -351,6 +359,7 @@ async function delVol(dev){
 /* ---- UI ---- */
 function volTxt(){const m=((parseInt(g("volGB"))||60)*.07).toFixed(2);$("volText").textContent=`Modelle bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft ca. $${m} pro Monat (${g("volGB")} GB, ca. $0.07/GB), auch wenn kein Pod läuft. Der erste Start lädt alles einmal. GPUs nur im Rechenzentrum des Volumes (${g("dc")}).`}
 function setMode(m){s("mode",m);draw()}
+function setDevModel(m){s("devModel",m);S.devVolId=null;S.devVolInfo="";draw();poll()}
 $("devVol").addEventListener("change",e=>{s("devVol",e.target.checked?"1":"0");draw()});
 const TT={none:"Kein Pod",boot:"Pod startet",setup:"Setup läuft",loading:"Modelle laden",ready:"Bereit"};
 function draw(){
@@ -363,6 +372,10 @@ function draw(){
   const rb=(k,n)=>{$("m_"+k).firstChild.innerHTML=(mode===k?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n};rb("demand","On Demand");rb("volume","Network Volume");rb("img","Bild-Server");rb("dev","Dev-Server");
   volTxt();$("volCard").style.display=mode==="volume"?"":"none";
   const dvOn=g("devVol")==="1";$("devCard").style.display=mode==="dev"?"":"none";$("devVol").checked=dvOn;$("devVolBox").style.display=dvOn?"":"none";$("devVolOff").style.display=dvOn?"none":"";
+  const fl=devFlash(),dmr=(k,on,n,t)=>{$("dm_"+k).firstChild.innerHTML=(on?'<span class="grn">(*)</span> ':'<span class="gry">( )</span> ')+n;$("dm_"+k+"_s").textContent=t};
+  dmr("27b",!fl,"Qwen3.8-27B",`1× 48 GB · ab ca. $0.40/h · Limit $${(parseFloat(g("devMaxPrice"))||0).toFixed(2)}/h · günstig, fast so stark`);
+  dmr("flash",fl,"Qwen3.8-Flash-Next",`ca. 120 GB · 2× 80 GB oder H200 · ab ca. $2.40/h · Limit $${(parseFloat(g("devMaxPriceFlash"))||0).toFixed(2)}/h · das stärkste`);
+  $("devVolGBL").style.display=fl?"none":"";$("devMaxVolGBL").style.display=fl?"":"none";$("devVolName").textContent=devVolName();
   $("devVolInfo").textContent=S.devVolId?"Vorhandenes Dev-Volume: "+S.devVolInfo:"";$("delDevVol").style.display=S.devVolId?"":"none";$("devVolSize").style.display=S.devVolId?"none":"";
   $("volInfo").textContent=S.volId?"Vorhandenes Volume: "+S.volInfo:"";$("delVol").style.display=S.volId?"":"none";$("volSize").style.display=S.volId?"none":"";
   $("go").disabled=S.busy&&!AUTO;$("go").textContent=AUTO?"Autostart beenden":S.busy?"Starte…":"Starten";$("go").className="btn"+(AUTO?" dan":"");$("autoInfo").textContent=autoTxt;

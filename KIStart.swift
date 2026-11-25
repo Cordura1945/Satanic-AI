@@ -82,9 +82,9 @@ struct RunPod {
         return "\"\""
     }
 
-    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false, img: Bool = false, lic: String = "") -> String {
+    static func deployMutation(gpu: String, image: String, disk: Int, hf: String, autoStop: Int, setupB64: String, volumeId: String? = nil, dc: String? = nil, idleMin: Int = 0, gpuCount: Int = 1, dev: Bool = false, img: Bool = false, lic: String = "", devModel: String = "") -> String {
         let cmd = "bash -c \"mkdir -p /workspace && echo $SETUP_B64 | base64 -d | gunzip > /workspace/setup_all.sh && cd /workspace && bash setup_all.sh 2>&1 | tee /workspace/setup.log; sleep infinity\""
-        let devEnv = (dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "}" : "") + (img ? ",{key:" + q("IMG_SERVER") + ",value:" + q("1") + "}" : "") + ",{key:" + q("LICENSE_KEY") + ",value:" + q(lic) + "}"
+        let devEnv = (dev ? ",{key:" + q("DEV_SERVER") + ",value:" + q("1") + "},{key:" + q("DEV_MODEL") + ",value:" + q(devModel) + "}" : "") + (img ? ",{key:" + q("IMG_SERVER") + ",value:" + q("1") + "}" : "") + ",{key:" + q("LICENSE_KEY") + ",value:" + q(lic) + "}"
         let env = "[{key:\(q("HF_TOKEN")),value:\(q(hf))},{key:\(q("AUTO_STOP_H")),value:\(q(String(autoStop)))},{key:\(q("IDLE_STOP_MIN")),value:\(q(String(idleMin)))},{key:\(q("SETUP_B64")),value:\(q(setupB64))}\(devEnv)]"
         var vol = ""
         if let v = volumeId, !v.isEmpty { vol = "networkVolumeId:\(q(v)),"; if let d = dc, !d.isEmpty { vol += "dataCenterId:\(q(d))," } }
@@ -130,6 +130,12 @@ final class Model: ObservableObject {
     @Published var volDC = ""
     @Published var maxPrice: Double { didSet { UserDefaults.standard.set(maxPrice, forKey: "maxPrice") } }
     @Published var devMaxPrice: Double { didSet { UserDefaults.standard.set(devMaxPrice, forKey: "devMaxPrice") } }
+    // Dev-Modell: "27b" = Qwen3.8-27B (eine 48-GB-GPU), "flash" = Qwen3.8-Flash-Next (ca. 120 GB, 2x 80 GB oder H200)
+    @Published var devModel: String { didSet { UserDefaults.standard.set(devModel, forKey: "devModel") } }
+    @Published var devMaxPriceFlash: Double { didSet { UserDefaults.standard.set(devMaxPriceFlash, forKey: "devMaxPriceFlash") } }
+    @Published var devMaxVolGB: Int { didSet { UserDefaults.standard.set(devMaxVolGB, forKey: "devMaxVolGB") } }
+    var devFlash: Bool { devModel == "flash" }
+    var devVolName: String { devFlash ? "ki-devmax-vol" : "ki-dev-vol" }
     @Published var imgMaxPrice: Double { didSet { UserDefaults.standard.set(imgMaxPrice, forKey: "imgMaxPrice") } }
     // Dev-Server mit eigenem Network Volume "ki-dev-vol" (Modell und Projekte bleiben gespeichert)
     @Published var devVol: Bool { didSet { UserDefaults.standard.set(devVol, forKey: "devVol") } }
@@ -137,10 +143,11 @@ final class Model: ObservableObject {
     @Published var devDc: String { didSet { UserDefaults.standard.set(devDc, forKey: "devDc") } }
     @Published var devVolId: String? = nil
     @Published var devVolInfo = ""
-    // Dev-Server: zuerst zwei 48-GB-GPUs, sonst eine 80-GB-GPU. "2x " heisst zwei GPUs im Pod.
+    // Dev-Server: "Nx " vor dem Namen heisst N GPUs im Pod. 27B passt auf eine 48-GB-GPU, Flash-Next braucht ca. 130 GB.
     // Bild-Server: eine einzelne 48-GB-GPU reicht (Qwen-Image-Edit), 80-GB als Ausweichloesung
     static let imgGpus: [String] = ["NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA L40", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
-    static let devGpus: [String] = ["2x NVIDIA A40", "2x NVIDIA RTX A6000", "2x NVIDIA L40", "NVIDIA A100 80GB PCIe", "2x NVIDIA L40S", "NVIDIA A100-SXM4-80GB", "2x NVIDIA RTX 6000 Ada Generation"]
+    static let dev27Gpus: [String] = ["NVIDIA A40", "NVIDIA RTX A6000", "NVIDIA L40", "NVIDIA L40S", "NVIDIA RTX 6000 Ada Generation", "NVIDIA A100 80GB PCIe", "NVIDIA A100-SXM4-80GB"]
+    static let devFlashGpus: [String] = ["3x NVIDIA A40", "3x NVIDIA RTX A6000", "2x NVIDIA A100 80GB PCIe", "2x NVIDIA A100-SXM4-80GB", "NVIDIA H200", "2x NVIDIA H100 PCIe", "2x NVIDIA H100 80GB HBM3", "3x NVIDIA L40S"]
 
     @Published var balance: Double? = nil
     @Published var spend: Double = 0
@@ -197,6 +204,9 @@ final class Model: ObservableObject {
         gpus = u.string(forKey: "gpus") ?? gl
         maxPrice = u.object(forKey: "maxPrice") as? Double ?? 0.60
         devMaxPrice = u.object(forKey: "devMaxPrice") as? Double ?? 1.25
+        devModel = u.string(forKey: "devModel") ?? "27b"
+        devMaxPriceFlash = u.object(forKey: "devMaxPriceFlash") as? Double ?? 4.00
+        devMaxVolGB = u.object(forKey: "devMaxVolGB") as? Int ?? 160
         imgMaxPrice = u.object(forKey: "imgMaxPrice") as? Double ?? 0.80
         devVol = u.bool(forKey: "devVol")
         devVolGB = u.object(forKey: "devVolGB") as? Int ?? 60
@@ -412,7 +422,7 @@ final class Model: ObservableObject {
                 volInfo = "\(sz) GB · \(v["dataCenterId"] as? String ?? "?") · ca. $\(String(format: "%.2f", Double(sz) * 0.07))/Monat"
                 volDC = v["dataCenterId"] as? String ?? ""
             } else { volId = nil; volInfo = ""; volDC = "" }
-            if let v = vols.first(where: { ($0["name"] as? String) == "ki-dev-vol" }) {
+            if let v = vols.first(where: { ($0["name"] as? String) == devVolName }) {
                 devVolId = v["id"] as? String
                 let sz = (v["size"] as? NSNumber)?.intValue ?? 0
                 devVolInfo = "\(sz) GB · \(v["dataCenterId"] as? String ?? "?") · ca. $\(String(format: "%.2f", Double(sz) * 0.07))/Monat"
@@ -557,8 +567,8 @@ final class Model: ObservableObject {
         var useVol: String? = nil
         var useDC: String? = nil
         let devMode = mode == "dev"
-        let volName = devMode ? "ki-dev-vol" : "ki-chat-vol"
-        let volSize = devMode ? devVolGB : volGB
+        let volName = devMode ? devVolName : "ki-chat-vol"
+        let volSize = devMode ? (devFlash ? devMaxVolGB : devVolGB) : volGB
         let volWant = devMode ? devDc.trimmingCharacters(in: .whitespaces).uppercased() : dc
         if (mode == "volume" || (devMode && devVol)) && !apiKey.isEmpty {
             message = "Network Volume wird vorbereitet…"
@@ -587,18 +597,19 @@ final class Model: ObservableObject {
         let img = mode == "img"
         var over: [String] = []
         let licKey = licenseKey.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
-        let limit = img ? imgMaxPrice : (dev ? devMaxPrice : maxPrice)
-        let list: [String] = img ? Model.imgGpus : (dev ? Model.devGpus : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
+        let limit = img ? imgMaxPrice : (dev ? (devFlash ? devMaxPriceFlash : devMaxPrice) : maxPrice)
+        let list: [String] = img ? Model.imgGpus : (dev ? (devFlash ? Model.devFlashGpus : Model.dev27Gpus) : gpus.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
         for entry in (apiKey.isEmpty ? [] : list) {
-            let n = entry.hasPrefix("2x ") ? 2 : 1
-            let g = n == 2 ? String(entry.dropFirst(3)) : entry
+            let pre = entry.split(separator: " ", maxSplits: 1).map(String.init)
+            let n = (pre.count == 2 && pre[0].hasSuffix("x")) ? (Int(pre[0].dropLast()) ?? 1) : 1
+            let g = n > 1 ? pre[1] : entry
             if let t = skipUntil[entry], t > Date() {
                 over.append(entry)
                 continue
             }
             message = "Versuche \(entry)…"
             do {
-                let m = RunPod.deployMutation(gpu: g, image: image, disk: img ? max(disk, 60) : (dev ? max(disk, 80) : disk), hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, img: img, lic: licKey)
+                let m = RunPod.deployMutation(gpu: g, image: image, disk: img ? max(disk, 60) : (dev ? max(disk, devFlash ? 200 : 80) : disk), hf: hfToken, autoStop: autoStop, setupB64: b64, volumeId: useVol, dc: useDC, idleMin: idleStop, gpuCount: n, dev: dev, img: img, lic: licKey, devModel: devModel)
                 let (d, err) = try await RunPod(key: apiKey).gql(m)
                 if let p = d["podFindAndDeployOnDemand"] as? [String: Any], let id = p["id"] as? String {
                     let c = (p["costPerHr"] as? NSNumber)?.doubleValue ?? 0
@@ -616,9 +627,9 @@ final class Model: ObservableObject {
                     await poll()
                     return
                 }
-                errs.append("\(g): \(err ?? "keine Antwort")")
+                errs.append("\(entry): \(err ?? "keine Antwort")")
             } catch {
-                errs.append("\(g): \(error.localizedDescription)")
+                errs.append("\(entry): \(error.localizedDescription)")
             }
         }
         if !vastKey.isEmpty && !dev && !img {
@@ -1001,6 +1012,19 @@ struct ContentView: View {
 
     var statusColor: Color { (m.phase == .none || m.phase == .ready) ? Theme.green : Theme.gold }
 
+    func devModelRow(_ id: String, _ name: String, _ text: String) -> some View {
+        Button { m.devModel = id; Task { await m.poll() } } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(m.devModel == id ? "(*)" : "( )").font(Theme.mono(13, bold: true)).foregroundColor(m.devModel == id ? Theme.green : Theme.gray)
+                    Text(name).font(Theme.mono(13, bold: true)).foregroundColor(.white)
+                    Spacer()
+                }
+                Text(text).font(Theme.mono(11)).foregroundColor(Theme.gray).multilineTextAlignment(.leading)
+            }
+        }.buttonStyle(.plain)
+    }
+
     func modeCard(_ id: String, _ name: String, _ text: String) -> some View {
         Button { m.mode = id } label: {
             Card(selected: m.mode == id) {
@@ -1042,7 +1066,8 @@ struct ContentView: View {
                 SecureField("Vast.ai API-Key (Ersatz, optional)", text: $m.vastKey).modifier(Field())
                 SecureField("Hugging-Face-Token", text: $m.hfToken).modifier(Field())
                 Stepper("Max. Preis: $\(String(format: "%.2f", m.maxPrice))/h", value: $m.maxPrice, in: 0...3, step: 0.05)
-                Stepper("Max. Preis Dev-Server: $\(String(format: "%.2f", m.devMaxPrice))/h", value: $m.devMaxPrice, in: 0...6, step: 0.05)
+                Stepper("Max. Preis Dev-Server 27B: $\(String(format: "%.2f", m.devMaxPrice))/h", value: $m.devMaxPrice, in: 0...6, step: 0.05)
+                Stepper("Max. Preis Dev-Server Flash-Next: $\(String(format: "%.2f", m.devMaxPriceFlash))/h", value: $m.devMaxPriceFlash, in: 0...12, step: 0.10)
                 Stepper("Max. Preis Bild-Server: $\(String(format: "%.2f", m.imgMaxPrice))/h", value: $m.imgMaxPrice, in: 0...4, step: 0.05)
                 Stepper("Auto-Beenden: \(m.autoStop == 0 ? "aus" : "\(m.autoStop) h")", value: $m.autoStop, in: 0...48)
                 Stepper("Leerlauf-Abschaltung: \(m.idleStop == 0 ? "aus" : "\(m.idleStop) Min")", value: $m.idleStop, in: 0...240, step: 5)
@@ -1070,8 +1095,13 @@ struct ContentView: View {
                 modeCard("img", "Bild-Server",
                          "Eigener Server nur zum Bilder-Bearbeiten: bestes offenes Modell (Qwen-Image-Edit) auf einer 48-GB-GPU, blauer Bild-Chat, ohne Chat-Teil. Bild hochladen, sagen was anders soll, fertiges Bild kommt zurück. Lädt bei jedem Start neu (ca. 10–20 Min). Kostet ab ca. $0.59 pro Stunde, eigenes Preislimit ($0.80) in den Einstellungen.")
                 modeCard("dev", "Dev-Server",
-                         "Eigener Server nur zum Programmieren: großes Programmier-Modell (ca. 49 GB) auf 2× 48 GB oder 1× 80 GB Grafikspeicher, Dev-Modus und grüne Dev Zone, ohne Bildteil. Ohne Volume lädt jeder Start alles neu (ca. 15–30 Min), mit eigenem Dev-Volume nur der erste. Kostet ab ca. $1.20 pro Stunde. Eigenes Preislimit ($1.25) in den Einstellungen, für teurere GPUs dort erhöhen.")
+                         "Eigener Server nur zum Programmieren, unzensiert, mit Dev-Modus und grüner Dev Zone, ohne Bildteil. Modell wählbar: Qwen3.8-27B auf einer 48-GB-GPU (ab ca. $0.40/h) oder Qwen3.8-Flash-Next, das stärkste offene Modell, auf 2× 80 GB oder einer H200 (ab ca. $2.40/h). Ohne Volume lädt jeder Start alles neu, mit eigenem Dev-Volume nur der erste. Preislimits in den Einstellungen.")
                 if m.mode == "dev" {
+                    Card {
+                        Text("Dev-Modell").font(Theme.mono(12, bold: true)).foregroundColor(.white)
+                        devModelRow("27b", "Qwen3.8-27B", "1× 48 GB · ab ca. $0.40/h · Limit $\(String(format: "%.2f", m.devMaxPrice))/h · günstig, fast so stark")
+                        devModelRow("flash", "Qwen3.8-Flash-Next", "ca. 120 GB · 2× 80 GB oder H200 · ab ca. $2.40/h · Limit $\(String(format: "%.2f", m.devMaxPriceFlash))/h · das stärkste")
+                    }
                     Card {
                         Toggle(isOn: $m.devVol) {
                             Text("Network Volume für den Dev-Server").font(Theme.mono(12, bold: true)).foregroundColor(.white)
@@ -1081,11 +1111,16 @@ struct ContentView: View {
                                 Text("Vorhandenes Dev-Volume: \(m.devVolInfo)").font(Theme.mono(12)).foregroundColor(Theme.gray)
                                 Button("[x] Dev-Volume löschen", role: .destructive) { confirmDevVol = true }.font(Theme.mono(12))
                             } else {
-                                Stepper("Größe: \(m.devVolGB) GB (ca. $\(String(format: "%.2f", Double(m.devVolGB) * 0.07))/Monat)", value: $m.devVolGB, in: 55...200, step: 5)
-                                    .foregroundColor(.white).font(Theme.mono(12))
+                                if m.devFlash {
+                                    Stepper("Größe: \(m.devMaxVolGB) GB (ca. $\(String(format: "%.2f", Double(m.devMaxVolGB) * 0.07))/Monat)", value: $m.devMaxVolGB, in: 150...400, step: 10)
+                                        .foregroundColor(.white).font(Theme.mono(12))
+                                } else {
+                                    Stepper("Größe: \(m.devVolGB) GB (ca. $\(String(format: "%.2f", Double(m.devVolGB) * 0.07))/Monat)", value: $m.devVolGB, in: 55...200, step: 5)
+                                        .foregroundColor(.white).font(Theme.mono(12))
+                                }
                                 TextField("Rechenzentrum, z.B. EU-RO-1", text: $m.devDc).modifier(Field()).textInputAutocapitalization(.characters).autocorrectionDisabled()
                             }
-                            Text("Eigenes Volume „ki-dev-vol“: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.")
+                            Text("Eigenes Volume „\(m.devVolName)“ für dieses Modell: Modell und Projekte bleiben gespeichert, spätere Starts dauern nur wenige Minuten. Kostet dauerhaft, auch wenn kein Pod läuft. Mit Volume gibt es nur GPUs aus dessen Rechenzentrum. Es wird beim ersten Start angelegt, falls es noch fehlt.")
                                 .font(Theme.mono(11.5)).foregroundColor(Theme.gray)
                         } else {
                             Text("Aus: On Demand, bei jedem Start wird alles neu geladen.").font(Theme.mono(11.5)).foregroundColor(Theme.gray)

@@ -1321,11 +1321,15 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
     if dev is not None: msgs[0]["content"] += dev_prompt(dev); tl = tl + DEV_TOOLS
     # Qwen-Modelle neigen bei sehr niedriger Temperatur zu Wiederholschleifen: im Dev-Modus 0.7
     temp = 0.7 if dev is not None else (0.3 if (tools and wants_code(client_msgs)) else 0.7)
+    if dev is not None: think = True  # Qwen3.8 ist mit Denkmodus deutlich staerker (die Benchmarks sind damit gemessen)
     retried = False; seen = {}; streak = 0; limit = MAX_ITER_DEV * (1 + AUTO_ROUNDS) if dev is not None else MAX_ITER
+    blocked = fails = last_mut = 0  # Schleifen-Bremse und Fortschritt
     for it in range(limit):
         if dev is not None:
             compact(msgs)
-            if it and it % MAX_ITER_DEV == 0:  # Auto-Weiter: nach 60 Schritten nicht anhalten, nur den Zwischenstand sichern lassen
+            if it and it % MAX_ITER_DEV == 0:  # Auto-Weiter nur, wenn in den letzten Schritten wirklich etwas geaendert wurde
+                if last_mut <= it - MAX_ITER_DEV:
+                    return wrapup(msgs, emit, fast, temp, dev, f"In den letzten {MAX_ITER_DEV} Schritten wurde nichts geaendert, deshalb geht es nicht automatisch weiter", f"Kein Fortschritt in {MAX_ITER_DEV} Schritten, Bericht statt weiterer Versuche")
                 emit({"type": "stat", "text": f"{it} Schritte erreicht, mache automatisch weiter (hoechstens {limit})"})
                 msgs.append({"role": "user", "content": f"SYSTEM-HINWEIS: {it} Schritte sind erreicht, es geht automatisch weiter (hoechstens {limit}). Halte zuerst mit note kurz fest, was erledigt und was offen ist, dann arbeite weiter. Ist alles erledigt, schreibe direkt den Abschlussbericht ohne Werkzeug."})
         st = {}; t0 = time.time()
@@ -1348,6 +1352,7 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
             if err:
                 emit({"type": "step", "ok": False, "text": err[:300]})
                 msgs.append({"role": "tool", "tool_call_id": c["id"], "content": err + f"\n[Schritt {it + 1} von {limit}]"})
+                fails += 1; blocked = 0
                 continue
             if c["name"] in DEV_FN:
                 lab, key = DEV_LABEL[c["name"]]
@@ -1368,7 +1373,12 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
                         elif c["name"] in DEV_READ: streak += 1
                         if c["name"] in DEV_MUT: seen.clear()
                         elif n == 2: res = "(Wiederholung: denselben Aufruf gab es in dieser Runde schon. Halte das Wichtige jetzt mit note fest.)\n" + res
-                if res.startswith("FEHLER"): emit({"type": "step", "ok": False, "text": res[:300]})
+                if res.startswith("FEHLER"):
+                    emit({"type": "step", "ok": False, "text": res[:300]})
+                    fails += 1; blocked = blocked + 1 if res.startswith("FEHLER: Genau diesen Aufruf") else 0
+                else:
+                    fails = blocked = 0
+                    if c["name"] in DEV_MUT: last_mut = it + 1
                 res += f"\n[Schritt {it + 1} von {limit}" + ("; komm jetzt zum Abschluss: Aenderungen pruefen und pushen oder den Stand mit note sichern" if it + 1 >= limit - 8 else "") + "]"
                 msgs.append({"role": "tool", "tool_call_id": c["id"], "content": res})
                 continue
@@ -1388,15 +1398,23 @@ def chat(client_msgs, emit, fast=False, tools=True, opts=None, think=False, dev=
                 emit({"type": "error", "text": f"{c['name']}: {e}"})
                 res = f"FEHLER: {e}"
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": res})
+        if dev is not None and (blocked >= 3 or fails >= 6):  # Schleifen-Bremse: nicht weiter ins Leere rechnen
+            why = f"{blocked} abgelehnte Wiederholungen in Folge" if blocked >= 3 else f"{fails} Fehler in Folge"
+            return wrapup(msgs, emit, fast, temp, dev, f"Du drehst dich im Kreis ({why}). Hoere auf, es so weiter zu versuchen", f"Angehalten: {why}")
     if dev is not None:
-        msgs.append({"role": "user", "content": "SYSTEM-HINWEIS: Das Schrittlimit dieser Runde ist erreicht. Rufe KEIN Werkzeug mehr auf. Schreibe jetzt eine kurze Zusammenfassung fuer den Nutzer: 1) was erledigt und gepusht ist, 2) was noch offen ist, 3) der naechste Schritt. Sage dem Nutzer, dass er mit 'weiter' fortsetzen kann."})
-        compact(msgs)
-        emit({"type": "delta", "text": "\n\n"})
-        text, _ = llm_stream(msgs, emit, fast, False, False, temp)
-        if (text or "").strip(): note_add("Stand am Schrittlimit: " + text.strip()[:1200])
-        pushlog(dev, text, emit)
-        return
+        return wrapup(msgs, emit, fast, temp, dev, "Das Schrittlimit ist erreicht", "Schrittlimit erreicht")
     emit({"type": "error", "text": "Zu viele Werkzeug-Schritte, abgebrochen."})
+
+def wrapup(msgs, emit, fast, temp, dev, why, label):
+    """Dev-Modus beenden: ohne Werkzeuge einen ehrlichen Bericht schreiben lassen (Stand, Hindernis, naechster Schritt)."""
+    emit({"type": "stat", "text": label})
+    msgs.append({"role": "user", "content": f"SYSTEM-HINWEIS: {why}. Rufe KEIN Werkzeug mehr auf. Schreibe jetzt kurz fuer den Nutzer: 1) was erledigt und gepusht ist, "
+                 "2) woran es haengt oder was noch offen ist, 3) was du von ihm brauchst oder was der naechste sinnvolle Schritt ist. Sage ihm, dass er mit 'weiter' fortsetzen kann."})
+    compact(msgs)
+    emit({"type": "delta", "text": "\n\n"})
+    text, _ = llm_stream(msgs, emit, fast, False, False, temp)
+    if (text or "").strip(): note_add(f"Stand ({label}): " + text.strip()[:1200])
+    pushlog(dev, text, emit)
 
 # ---------------- Dev-Modus (Projekte, Shell, GitHub) ----------------
 import hashlib, hmac, signal, tempfile
@@ -1414,7 +1432,7 @@ SEALED = [None]
 MAX_ITER_DEV = 60
 AUTO_ROUNDS = 2  # so oft macht der Dev-Modus nach MAX_ITER_DEV Schritten von selbst weiter (Stopp-Knopf geht immer)
 NOTES = os.path.join(STORE, "dev_notes.md")
-DEV_RO = {"list_files", "read_file", "search", "outline", "run", "build_status", "get_build", "send_file", "check", "changes", "preview", "fetch_url", "find_files", "run_tests"}
+DEV_RO = {"list_files", "read_file", "search", "outline", "run", "test_server", "build_status", "get_build", "send_file", "check", "changes", "preview", "fetch_url", "find_files", "run_tests"}
 DEV_READ = {"list_files", "read_file", "search", "outline", "find_files", "fetch_url"}
 WORK = "satanic-dev"
 DEV_MUT = {"write_file", "edit_file", "git_clone", "git_push", "use_upload", "build_rerun", "create_repo", "delete_path", "move_path"}
@@ -1509,13 +1527,17 @@ def _own(p):
 def _ign():
     if not os.path.exists(GITIGN) or "_tmp/" not in open(GITIGN).read():
         open(GITIGN, "w").write("__pycache__/\n*.pyc\nnode_modules/\n.DS_Store\n.venv/\n_tmp/\n"); os.chmod(GITIGN, 0o644)
-def sh(cmd, cwd, timeout=120, extra=None):
+def _sbx(extra=None):
+    """Umgebung und Nutzer fuer Befehle der KI (ohne Root-Rechte, wenn der Sandbox-Nutzer da ist)."""
     if not SHELL_OK: raise ValueError("Sandbox-Nutzer 'agent' fehlt auf dem Pod (setup_all.sh neu ausfuehren)")
     _ign()
     env = {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.excludesFile", "GIT_CONFIG_VALUE_0": GITIGN,"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"), "LANG": "C.UTF-8", "TERM": "dumb",
            "HOME": _AG.pw_dir if SANDBOX else os.environ.get("HOME", "/tmp"), "GIT_TERMINAL_PROMPT": "0", "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONDONTWRITEBYTECODE": "1"}
     if extra: env.update(extra)
-    kw = {"user": _AG.pw_uid, "group": _AG.pw_gid, "extra_groups": []} if SANDBOX else {}
+    return env, ({"user": _AG.pw_uid, "group": _AG.pw_gid, "extra_groups": []} if SANDBOX else {})
+
+def sh(cmd, cwd, timeout=120, extra=None):
+    env, kw = _sbx(extra)
     with tempfile.TemporaryFile() as tf:
         p = subprocess.Popen(cmd if isinstance(cmd, list) else ["bash", "-c", cmd], cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                              stdout=tf, stderr=subprocess.STDOUT, start_new_session=True, **kw)
@@ -1809,7 +1831,57 @@ def t_run(a, cfg):
     try: t = max(5, min(int(a.get("timeout") or 120), 600))
     except Exception: t = 120
     code, out = sh(cmd, cwd, t)
-    return f"exit={code}{' (Zeitlimit erreicht, abgebrochen)' if code == -9 else ''}\n{clip(out.strip(), 6000) or '(keine Ausgabe)'}"
+    bg = "\nHinweis: Hintergrund-Prozesse (mit &) werden am Ende des Befehls beendet. Einen Server testest du mit test_server." if BG_RX.search(cmd) else ""
+    return f"exit={code}{' (Zeitlimit erreicht, abgebrochen)' if code == -9 else ''}\n{clip(out.strip(), 6000) or '(keine Ausgabe)'}{bg}"
+
+BG_RX = re.compile(r"(?<![&>|])&(?![&>])")
+SERVE_BLOCK = {8000, 8080, 8081, 8818}
+def t_serve(a, cfg):
+    """Server im Hintergrund starten, warten bis er antwortet, Seiten abrufen, Log liefern, Server beenden."""
+    cmd = str(a.get("command") or "").strip()
+    if not cmd: raise ValueError("command fehlt (Startbefehl des Servers, z.B. node index.js)")
+    if TOKRX.search(cmd): raise ValueError(TOKMSG)
+    if GITBLOCK.search(cmd): raise ValueError(GITMSG)
+    cwd = ppath(a.get("cwd"), True)
+    if not os.path.isdir(cwd): raise ValueError("cwd muss ein Ordner sein")
+    try: port = int(a.get("port") or 0)
+    except Exception: port = 0
+    if not 1024 <= port <= 65535 or port in SERVE_BLOCK: raise ValueError("port: der Port, auf dem dein Server lauscht (ab 1024; 8000, 8080, 8081 und 8818 sind belegt)")
+    paths = a.get("paths") or ["/"]
+    if isinstance(paths, str): paths = [paths]
+    paths = [p if str(p).startswith("/") else "/" + str(p) for p in paths][:5]
+    try: wait = max(5, min(int(a.get("wait") or 30), 120))
+    except Exception: wait = 30
+    def alive():
+        try: socket.create_connection(("127.0.0.1", port), timeout=1).close(); return True
+        except OSError: return False
+    if alive(): raise ValueError(f"Port {port} ist schon belegt, nimm einen anderen")
+    env, kw = _sbx({"PORT": str(port)})
+    with tempfile.TemporaryFile() as tf:
+        p = subprocess.Popen(["bash", "-c", cmd], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=tf, stderr=subprocess.STDOUT, start_new_session=True, **kw)
+        out = []; up = False
+        try:
+            end = time.time() + wait
+            while time.time() < end and p.poll() is None:
+                if alive(): up = True; break
+                time.sleep(0.5)
+            op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            for path in (paths if up else []):
+                try:
+                    with op.open(f"http://127.0.0.1:{port}{path}", timeout=15) as r:
+                        body = r.read(200000); out.append(f"GET {path} -> HTTP {r.status} ({r.headers.get('Content-Type', '')}, {len(body)} Bytes)\n{clip(body.decode('utf-8', 'replace'), 1500)}")
+                except urllib.error.HTTPError as e: out.append(f"GET {path} -> HTTP {e.code}\n{clip(e.read(20000).decode('utf-8', 'replace'), 800)}")
+                except Exception as e: out.append(f"GET {path} -> Fehler: {e}")
+        finally:
+            ended = p.poll()
+            try: os.killpg(p.pid, signal.SIGKILL)
+            except Exception: pass
+            try: p.wait(timeout=5)
+            except Exception: pass
+        size = os.fstat(tf.fileno()).st_size; tf.seek(max(0, size - 3000)); log = tf.read().decode("utf-8", "replace").strip()
+    head = (f"Server antwortet auf Port {port}." if up else
+            (f"Server hat sich beendet (exit={ended}), bevor er auf Port {port} geantwortet hat." if ended is not None else f"Server hat nach {wait} s nicht auf Port {port} geantwortet (lauscht er auf einem anderen Port?)."))
+    return head + ("\n\n" + "\n\n".join(out) if out else "") + "\n\nServer-Log (Ende):\n" + (clip(log, 2500) or "(leer)") + "\n(Der Server wurde danach beendet.)"
 
 def t_clone(a, cfg):
     repo = repo_ok(a.get("repo") or cfg.get("repo")); br = branch_ok(a.get("branch") or (cfg.get("branch") if not a.get("repo") or repo == cfg.get("repo") else ""))
@@ -2302,13 +2374,13 @@ def t_move(a, cfg):
 DEV_FN = {"note": t_note, "list_files": t_list, "read_file": t_read, "outline": t_outline, "write_file": t_write, "edit_file": t_edit, "search": t_search,
           "run": t_run, "git_clone": t_clone, "git_push": t_push, "build_status": t_build, "get_build": t_getbuild, "send_file": t_sendfile, "use_upload": t_upload, "build_rerun": t_rerun,
           "check": t_check, "changes": t_changes, "create_repo": t_create_repo, "preview": t_preview, "fetch_url": t_fetch, "find_files": t_find,
-          "run_tests": t_tests, "delete_path": t_delete, "move_path": t_move}
+          "run_tests": t_tests, "delete_path": t_delete, "move_path": t_move, "test_server": t_serve}
 DEV_LABEL = {"note": ("Notiz", "text"), "list_files": ("Liste Dateien", "path"), "read_file": ("Lese", "path"), "outline": ("Gliederung", "path"), "write_file": ("Schreibe", "path"), "edit_file": ("Aendere", "path"),
              "search": ("Suche", "pattern"), "run": ("Fuehre aus", "command"), "git_clone": ("Hole Repo", "repo"), "git_push": ("Commit + Push", "message"),
              "build_status": ("Pruefe Build", "project"), "get_build": ("Hole Build-Dateien", "project"), "send_file": ("Uebergebe Datei", "path"), "use_upload": ("Uebernehme Anhang", "id"), "build_rerun": ("Starte Build neu", "project"),
              "check": ("Pruefe", "project"), "changes": ("Zeige Aenderungen", "project"), "create_repo": ("Lege Repo an", "name"), "preview": ("Vorschau", "path"),
              "fetch_url": ("Lese Webseite", "url"), "find_files": ("Finde Dateien", "pattern"), "run_tests": ("Tests", "project"), "delete_path": ("Loesche", "path"),
-             "move_path": ("Verschiebe", "path")}
+             "move_path": ("Verschiebe", "path"), "test_server": ("Teste Server", "command")}
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {"type": "object", "properties": props, "required": req}}}
 _S = lambda d: {"type": "string", "description": d}
@@ -2329,8 +2401,12 @@ DEV_TOOLS = [
                 "items": {"type": "object", "properties": {"old": _S("exakter vorhandener Text"), "new": _S("neuer Text"), "all": {"type": "boolean"}}, "required": ["old", "new"]}}}, ["path"]),
  _fn("search", "Sucht ein Muster (Regex, ohne Gross/Klein) in den Projektdateien.", {"pattern": _S("Suchmuster"), "path": _S("Ordner oder Datei, leer = alles"),
      "context": {"type": "integer", "description": "0 bis 3 Zeilen vor und nach jedem Treffer mit ausgeben"}}, ["pattern"]),
- _fn("run", "Fuehrt einen Shell-Befehl (bash) im Projektordner aus und liefert Ausgabe und Exit-Code. Fuer Syntaxpruefung, Tests, Skripte. Keine Dauerlaeufer oder Server starten.",
+ _fn("run", "Fuehrt einen Shell-Befehl (bash) im Projektordner aus und liefert Ausgabe und Exit-Code. Fuer Syntaxpruefung, Tests, Skripte. Hintergrund-Prozesse (&) werden am Ende des Befehls beendet: Server testest du mit test_server.",
      {"command": _S("Shell-Befehl"), "cwd": _S("Arbeitsordner relativ zum Projektordner"), "timeout": {"type": "integer", "description": "Sekunden, Standard 120, hoechstens 600"}}, ["command"]),
+ _fn("test_server", "Startet einen Server (z.B. node index.js oder python3 app.py) im Hintergrund, wartet bis er auf dem Port antwortet, ruft Seiten ab und liefert die Antworten plus das Server-Log. Danach wird der Server beendet. Fuer Web-Server und APIs, statt run mit &.",
+     {"command": _S("Startbefehl des Servers"), "port": {"type": "integer", "description": "Port, auf dem der Server lauscht (ab 1024, nicht 8000/8080/8081/8818); steht auch als Umgebungsvariable PORT bereit"},
+      "paths": {"type": "array", "items": {"type": "string"}, "description": "abzurufende Pfade, z.B. [\"/\", \"/api/status\"] (hoechstens 5, Standard /)"},
+      "cwd": _S("Ordner relativ zum Projektordner"), "wait": {"type": "integer", "description": "Sekunden, bis der Server antworten muss (Standard 30)"}}, ["command", "port"]),
  _fn("git_clone", "Holt ein GitHub-Repo in den Projektordner oder aktualisiert es, wenn es schon da ist. Ohne Angaben wird das in den Einstellungen hinterlegte Repo genommen.",
      {"repo": _S("besitzer/name"), "branch": _S("Branch, leer = Standard"),
       "fresh": {"type": "boolean", "description": "lokalen Stand verwerfen und exakt den Stand von GitHub holen (nach einem Konflikt); lokale Commits bleiben im Zweig satanic-sicherung"}}, []),
@@ -2400,7 +2476,7 @@ def dev_prompt(cfg):
      "Projekte liegen im Projektordner /workspace/projects (Pfade relativ dazu); rate keine anderen Ordner wie /home/... . "
      "NEUES PROJEKT: create_repo legt Repo und Ordner an, dann write_file, check, git_push. git_clone nur fuer Repos, die es auf GitHub schon gibt. "
      "PRUEFEN: immer mit check (prueft auch JavaScript in HTML wirklich); run mit node, bash -n oder python auf HTML-Dateien prueft NICHTS. Gibt es Tests, run_tests. "
-     "Web-Apps (HTML) nach dem Bauen mit preview zeigen. Dokumentation oder unbekannte Fehlermeldungen kannst du mit fetch_url nachlesen. "
+     "Web-Apps (HTML) nach dem Bauen mit preview zeigen. Server und APIs (node, python ...) testest du mit test_server, nicht mit run und &. Dokumentation oder unbekannte Fehlermeldungen kannst du mit fetch_url nachlesen. "
      "Commits macht nur git_push (git commit in run ist gesperrt). Unter deiner Antwort zeigt der Server ein Protokoll der echten Pushes; deine Angaben muessen dazu passen. "
      "Ein Bild oder Dokument aus dem Chat holst du mit use_upload ins Projekt; suche nie selbst auf dem Server danach. git_push prueft vor dem Push die Syntax der geaenderten Dateien und lehnt bei Fehlern ab. "
      "DATEIEN AN DEN NUTZER: create_file kann NUR Text und PDF aus Text erzeugen, den du selbst schreibst; niemals ZIP, Bilder oder andere Binaerdateien damit uebergeben. "

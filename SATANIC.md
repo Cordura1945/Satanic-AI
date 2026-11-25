@@ -45,3 +45,4 @@
 - Grosse Dateien (chat/server.py, chat/index.html, KIStart.swift, app.html) nie komplett lesen: erst outline oder search, dann read_file ab der gefundenen Zeile. Funde mit note festhalten.
 - chat/server.py darf nur die Python-Standardbibliothek nutzen (auf dem Pod wird nichts nachinstalliert). Einzige Ausnahme: der Bildabgleich des Bild-Servers (keep_original, _align, _match_color) nutzt Pillow und numpy aus ComfyUI und faellt ohne sie auf das alte Verhalten zurueck.
 - llama.cpp ist im Setup auf eine feste Version gesetzt (LLAMA_TAG in setup_template.sh). Aktualisieren nur bewusst und danach testen.
+- Dev-Server: Modell wird in der App gewaehlt (DEV_MODEL=27b oder flash, siehe setup_template.sh). Server und APIs mit test_server pruefen, nicht mit run und &.

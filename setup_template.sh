@@ -28,7 +28,7 @@ def calc(text):
     if "Chat-App starten" in text: st = 6
     frac = 0.0
     if st == 2:
-        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / (48.6e9 if os.environ.get("DEV_SERVER") == "1" else (31e9 if os.environ.get("IMG_SERVER") == "1" else 37e9)), 1.0)
+        frac = min((size("/workspace/ComfyUI/models") + size("/workspace/models")) / ({"flash": 120e9, "27b": 23e9}.get((os.environ.get("DEV_MODEL") or "").lower(), 48.6e9) if os.environ.get("DEV_SERVER") == "1" else (31e9 if os.environ.get("IMG_SERVER") == "1" else 37e9)), 1.0)
     if st == 3:
         try:
             ms = re.findall(r"\[\s*(\d+)%\]", open("/tmp/build.log", errors="ignore").read())
@@ -163,6 +163,59 @@ jobs = [
  ("orcarouter/Qwen3.8-27B-Uncensored-GGUF", "Qwen3.8-27B-Uncensored-Q4_K_M.gguf", "/workspace/models/llm"),
 ]
 DEV = os.environ.get("DEV_SERVER") == "1"
+DEVM = (os.environ.get("DEV_MODEL") or "coder").strip().lower()
+if DEV and DEVM in ("27b", "flash"):
+    # Dev-Modell nach Wahl in der App: Qwen3.8-27B (1 GPU mit 48 GB) oder Qwen3.8-Flash-Next (ca. 120 GB, 2x 80 GB oder H200)
+    import re, time
+    from huggingface_hub import list_repo_files
+    L = "/workspace/models/llm"; os.makedirs(L, exist_ok=True)
+    try: os.remove(L + "/dev_model.txt")
+    except Exception: pass
+    old = L + "/huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf"  # frueheres Dev-Modell: macht auf dem Volume Platz
+    if os.path.exists(old): os.remove(old); print("OK     altes Dev-Modell (Qwen3-Coder-Next) entfernt, Platz frei")
+    def pick(repo, prefs):
+        fs = [f for f in list_repo_files(repo, token=tok) if f.lower().endswith(".gguf") and "mmproj" not in f.lower() and "mtp" not in f.lower()]
+        for p in prefs:
+            groups = {}
+            for f in sorted(f for f in fs if p in os.path.basename(f).lower()):  # geteilte Dateien (...-00001-of-00003.gguf) gehoeren zusammen
+                groups.setdefault(re.sub(r"-\d{5}-of-\d{5}(?=\.gguf$)", "", f), []).append(f)
+            if groups: return sorted(groups.items())[0][1]
+        return []
+    def fetch(repo, files, dest):
+        for f in files:
+            p = os.path.join(dest, f)
+            if os.path.exists(p) and os.path.getsize(p) > 1000000: print("OK     " + os.path.basename(f) + " vorhanden"); continue
+            for i in range(1, 4):
+                try:
+                    print("LADE   %s (Versuch %d/3)" % (f, i), flush=True); d(repo, f, local_dir=dest, token=tok); break
+                except Exception as e:
+                    print("HINWEIS", os.path.basename(f), type(e).__name__, str(e)[:160], flush=True)
+                    if i == 3: raise
+                    time.sleep(10 * i)
+        return os.path.join(dest, files[0])
+    def get27():
+        repo = "orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+        fs = pick(repo, ["q6_k", "q8_0", "q5_k_m", "q4_k_m"])
+        if not fs: raise RuntimeError("keine passende Datei in " + repo)
+        return fetch(repo, fs, L + "/dev27b")
+    def getflash():
+        for repo in ("huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-GGUF", "orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"):
+            try:
+                fs = pick(repo, ["q4_k_m", "iq4_xs", "q4_k_s", "iq4_nl", "q4_0"])
+                if fs: return fetch(repo, fs, L + "/flash")
+                print("HINWEIS: keine 4-Bit-Fassung in " + repo)
+            except Exception as e: print("HINWEIS", repo, type(e).__name__, str(e)[:160])
+        raise RuntimeError("Flash-Next nicht ladbar")
+    path = None
+    try: path = getflash() if DEVM == "flash" else get27()
+    except Exception as e:
+        print("FEHLER Dev-Modell", DEVM, type(e).__name__, str(e)[:200])
+        if DEVM == "flash":
+            print("HINWEIS: nehme stattdessen Qwen3.8-27B")
+            try: path = get27()
+            except Exception as e2: print("FEHLER Dev-Modell 27B", type(e2).__name__, str(e2)[:200])
+    if path: open(L + "/dev_model.txt", "w").write(path); print("OK     Dev-Modell: " + path)
+    raise SystemExit
 if DEV: jobs = [("bartowski/huihui-ai_Qwen3-Coder-Next-abliterated-GGUF", "huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf", "/workspace/models/llm")]
 for repo, f, dest in jobs:
     try:
@@ -256,7 +309,7 @@ if [ "$DEV" = "0" ]; then cd /workspace/ComfyUI; nohup python main.py --listen 0
 
 echo "=== 5/5 LLM-Server starten (Port 8080) ==="
 M=/workspace/models/llm/Qwen3.8-27B-Uncensored-Q4_K_M.gguf
-CTX=32768; if [ "$DEV" = "1" ]; then M=/workspace/models/llm/huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf; CTX=65536; fi
+CTX=32768; if [ "$DEV" = "1" ]; then M=/workspace/models/llm/huihui-ai_Qwen3-Coder-Next-abliterated-Q4_K_M.gguf; CTX=65536; [ -s /workspace/models/llm/dev_model.txt ] && M=$(cat /workspace/models/llm/dev_model.txt); echo "Dev-Modell: $M"; fi
 if [ "$LLM_OK" = "1" ] && [ -f "$M" ]; then
   cd /workspace
   MMP=""; [ "$DEV" = "0" ] && [ -f /workspace/models/llm/mmproj.gguf ] && MMP="--mmproj /workspace/models/llm/mmproj.gguf"
